@@ -1,0 +1,27 @@
+一旦我所属的文件夹有所变化请更新我。
+
+负责 Zoho OAuth 刷新和限定部门的只读工单/会话获取。
+向同步编排返回 ticket.RawSnapshot，保留原始业务响应供存储及清洗。
+不写 Zoho，不进行 AI 调用，不决定持久化采样额度。
+
+| 名称 | 地位 | 功能 |
+| --- | --- | --- |
+| AGENTS.md | 目录约定 | 读取边界与文件索引 |
+| client.go | HTTP 边界 | 最近工单、固定 ID 增量与权限回退、消息分页及截断补全 |
+| client_test.go | 合成协议测试 | 分页、固定 ID/部门边界、403 回退及完整正文 |
+
+依据固定的 docs/zoho-oas；列表仅按 -createdTime 排序。错误只报告阶段、HTTP 状态及白名单固定权限错误码，不打印响应正文、Token 或 URL 查询。私有 HTTP 状态错误保留请求方法，避免把 OAuth POST 的 403 当成业务搜索权限问题。
+
+## 限定 ID 的增量回退
+
+Changed 首选 `/api/v1/tickets/search`，传入已冻结的最多 50 个 ID、固定部门及 modifiedTimeRange。仅该业务 GET 返回 HTTP 403 时切换为逐 ID 的 `/api/v1/tickets/{ticketId}` 检查；其他 HTTP、网络、认证或响应错误继续失败。搜索返回不在固定样本中的 ID 或其他部门也直接拒绝，不回退绕过边界。
+
+403 模式只缓存在当前 Client 实例，使用原子标记；首次切换记录一次固定说明、HTTP 状态和样本数量，不含 ID、部门、正文、URL 或密钥。进程重启/新 Client 会重新尝试搜索。模式缓存不是权限升级，也不增加采样 ID 或遍历任何部门列表。
+
+回退依据 OAS `Ticket.json` 的 Get Ticket（Desk.tickets.READ）和 ticketResponse 的 id、departmentId、modifiedTime。省略可选 include，不猜测字段投影参数。接口实际返回工单详情，客户端只提取上述元数据；每张必须验证返回 ID 和部门，用 RFC3339Nano 解析更新时间，按 `since <= modifiedTime <= until` 选择。缺失/无效时间或任意一票失败使本轮失败，不能以部分结果推进水位。OAS 旧示例有毫秒数字，而 schema 为时间字符串；当前遵循已有时间解析契约，未知格式保守失败。
+
+每轮最多读取 50 个固定 ID 的详情（同一调用中重复 ID 去重），不由 Changed 获取 threads/comments，也不访问样本外 ID。代价是搜索受限后每轮约 N 次详情读取；这些响应可能包含比元数据更多的工单字段。没有本地版本比较，重叠回查窗口内的工单仍可能由 syncer 再完整 Fetch，不能声称避免了所有重复会话读取。同步水位及重启恢复仍由 syncer/store 决定。
+
+## 验证与简化
+
+复用一个 Changed 表驱动场景验证搜索成功、ID/部门边界、超过 50 拒绝、403 缓存回退、闭区间时间筛选、元数据错 ID/部门/时间、下游拒绝的脱敏错误，以及 OAuth 403 与其他搜索错误不回退。仅使用 httptest，不读 .env/data 或真实服务。设计简化检查：保持原 Changed 签名和具体 Client，不增加 store 依赖、权限探测服务、配置开关或新的增量接口；私有元数据读取函数和类型化状态错误各承担一个必要边界。

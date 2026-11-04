@@ -1,31 +1,52 @@
 # 进度
 
-检查日期：2026-11-04。当前阶段：Goal 启动前配置；尚未创建 Goal。
+更新日期：2026-11-04。Goal：active，未完成。当前里程碑：真实受控采集、持久化、前端及独立 AI 接口。
 
-- 完成：检查空项目目录、父级 Git 边界、工具链和已有 Skills；准备无密钥模板、忽略规则和根 AGENTS.md。
-- 环境：Go 1.27.3；Node 26.10.0；npm 11.19.1；pnpm 12.17.0；Python 3.13.5；uv 0.12.19；Git 2.47.3。版本仅为环境观察，不代表项目依赖已选定或兼容性已验证。
-- 验证：项目原无代码或 .env。父级 /workspace 是 Git 根，存在大量用户改动；只用命令级 safe.directory 读取，未修改全局 Git 配置或父级文件。
-- 准备文件检查：用户已填写凭据，Jev/Bub 已开启，企业微信关闭；补全配置后必需字段齐全。.env 经用户编辑后属主及权限发生变化，已恢复为当前用户持有且权限 0600。Git 忽略规则及根文档索引检查通过。
-- Skills：Reviewer 核实已安装 tdd 与 Matt 上游当前文本一致；已有 think/check/hunt/reclaim-code-entropy，未重复安装。
-- 真实工单采集：0；真实模型请求：0；Zoho 认证及部门读取：真实验证通过（1 次 OAuth 刷新、1 次部门查询）；工单读取与 AI 服务：未验证。
-- 消融：仅设计检查；复用现有 Skills，暂不新增安装器、检查脚本、空模块或未消费的配置项；未执行代码消融实验。
-- 文档同步：根索引覆盖当前准备文件；暂无自有代码文件或子目录。
-- Goal 保存：完整要求及已确认选择已整理至 GOAL.md，并加入根文档索引；当前没有激活的 Goal，保存文件不等于启动。
-- Goal 文档验证：17 节完整性、Markdown 围栏、本地链接和根索引检查通过；Reviewer 对照原始要求只读复核，未发现实质遗漏或新增权限。本轮未采集工单或调用模型。
-- 产品与运行位置：用户确认 Jev 为 typesafe.ai、Bub 为 bub.build，总结供应商为 DeepSeek；先在当前机器运行，之后再部署。
-- 官方接口核实（2026-11-04）：Jev 使用 POST https://api.typesafe.ai/v1/systemone、Bearer 认证；官方 Models 页列出当前稳定版 jev-1.14.0，已写入模板。账户访问权尚未验证。
-- 能力边界：Jev 输出类型化判断，不生成自由文本；诉求采用标签并保留未知，具体事实仍查看会话。Bub 官网确认有 Python SDK，模型供应商单独配置。
-- Bub SDK 核实：Reviewer 查阅 Core API，支持无工具、内存会话调用，无需 App 或插件。Republic 接受 provider:model 及显式 api_base/api_key，后续实现需关闭 SDK 隐式重试，由 Go 统一计数。
-- DeepSeek 配置核实（2026-11-04）：官方 base 为 https://api.deepseek.com，当前文档采用 deepseek-flash，项目配置为 deepseek:deepseek-flash。该服务端别名当前由 V4.1-Flash-1017 提供，不能宣称不可变模型快照；记录接口实际返回的模型信息，未提供精确版本时明确未知。
-- 配置准备：仅补全 .env 中空白的 Jev 端点/模型与 Bub 模型地址/标识，不覆盖非空值，不修改 Key 或启用开关。根索引检查通过，未新增配置项或模块。
-- 部门定位：用户指定 Labelife。按官方 searchStr 查询后再次核对部门名称，按 ID 去重，确认唯一且启用；补全空白 ZOHO_DEPARTMENT_ID 和同数据中心 ZOHO_BASE_URL，未覆盖其他配置或保存 Token。
-- 配置阻塞：已解除。待 Goal 验证：该部门工单/往来读取权限、AI 凭据有效性与账户模型访问权；仅字段齐全不代表这些接入已完成。
-- Git 边界：当前项目没有独立 .git；Goal 初始化时需明确在此建立独立仓库或使用父仓库，不能把父级改动当作本项目工作。
-- 待调整：开发采样累计上限与正式新增同步范围分开；正式运行模型额度独立于研发预算；持久化同步范围和计数，避免重启绕过限制。
-- 下一步：用户启动 Goal 后初始化项目，从 Labelife 近期默认最多 50 张工单开始受控采样、往来补齐和清洗，遵守累计范围及模型预算。
+## 已完成
 
-公开依据：[Zoho API](https://desk.zoho.com/DeskAPIDocument)、[Zoho Self Client](https://www.zoho.com/developer/oauth/self-client/authorization-code-flow.html)、[Matt Skills](https://github.com/mattpocock/skills)、[Codex Goals](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)。
+- 独立 Git 仓库位于当前目录，基线 e595a36，分支 feat/workstation；父仓库未改、未推送远程。
+- 根 .env 已配置且权限 0600；Labelife 唯一部门、OAuth 和工单读取已验证；Jev/Bub 开启，企业微信关闭。数据、凭据和构建产物被 Git 忽略。
+- 完整 GOAL.md、根/自有目录 AGENTS.md 与轻量结构检查已建立。Zoho OAS Submodule 固定 1e77db20ed01b73c52b7b9bd0ade97be8acfa611。
+- Go 依赖已锁；web/ 使用 pnpm 锁定 Svelte 5、Vite、shadcn-svelte、Tailwind；python/ 使用 uv 锁定 Bub/Republic Core 0.6.1。版本来源和兼容性见各目录文档。
+- 实现受控分页、完整线程补取、规范化、保守脱敏、SQLite、冻结采样、分批恢复/固定水位、增量搜索和本机查询 API。
+- 实现 Svelte 列表搜索/状态筛选、详情会话、Jev/Bub 展示、引用定位及运行状态；Go 提供 web/dist，不需要生产 Node 服务。
+- AI 使用同一脱敏快照/Hash；Jev 14 个 Choice 评估，Bub 固定 Python stdin/stdout、无工具/插件/持久记忆。结果按输入/Schema/模型追加，失败保留成功，旧输入不覆盖新输入。
+- 网络请求前持久占用研发额度，单轮 20、总计 60；默认 development-1 不因重启清零，同一输入失败最多自动尝试两次。
 
-AI 配置依据：[TypeSafe Quickstart](https://docs.typesafe.ai/introduction/quickstart)、[TypeSafe Models](https://docs.typesafe.ai/models)、[TypeSafe 类型化判断](https://docs.typesafe.ai/introduction)、[Bub 官网](https://bub.build/)。公开文档读取成功；read 本地提取器遇 TLS 超时，以内置网页工具成功结果核实，未访问计费业务接口。
+## 真实数据与调用预算
 
-Bub 映射依据：[Bub Core API](https://bub.build/docs/reference/python-api/)、[Republic Provider API](https://getrepublic.org/reference/provider-api/)、[Republic DeepSeek](https://getrepublic.org/providers/deepseek/)、[DeepSeek 官方配置](https://api-docs.deepseek.com/)。
+- 冻结并完整保存 49 张 Labelife 工单，采样上限仍为累计 50。32 次补取批次成功、remaining=0，成功水位已保存。没有扩展部门或历史范围。
+- 固定开发集 17 张、留出集 3 张，仅在忽略的 data/review 中；不是人工标准答案。20 张有 34 条消息，其中客服 13、客户 10、混合聊天转录 11；该开发集暂无附件和内部备注证据。
+- 真实 ONLINE_CHAT 线程混合双方聊天，已标记 unknown/mixed_authors；本地重新规范化旧快照，保留原始证据和远端 checked_at。
+- 抽查发现访客 IP/位置及 HTML 编码的设备标识，已修脱敏并验证当前 20 份无检测到的邮件、访客字段原值及 sn/mac 原值；不能据此声称完全匿名。
+- 真实模型请求累计 6 / 60（development-1 为 6 / 20）：Jev 3 次成功；Bub 3 次中 2 成功、1 本地校验失败。失败样本仅重试一次后成功；首份失败原文已丢弃，具体原因未知，不能将成功重试包装为已定位根因。
+- 成功 Bub 样本明确区分已执行自检及客户反馈，与降密度、检查电源、清洁等仅建议措施。只是单例事实抽查，不是业务准确率证明。
+
+## 验证证据
+
+- Go 测试覆盖多页工单和各 51 条线程/备注、冻结范围、截断拒绝、重复保存、重启恢复、连续小批次、失败不推进水位、旧结果隔离、失败保留成功和 20/60 请求额度。
+- 清洗测试覆盖否定事实、顺序、角色、草稿、混合作者、已知个人信息及编码设备标识。共享输入测试证明展示状态/优先级/编辑时间不触发 Hash 变化，新消息事实会失效。
+- Jev 合成正常/未知/失败/非法枚举测试通过；真实服务返回 jev-1.14.0，保存实际模型与用量。
+- Bub Python 合成结构/引用/执行状态与完整 SDK Mock HTTP 流通过；Go 二次验证 JSON/引用/执行状态。最小环境和固定安全错误输出通过，SDK 无自动额外模型请求。
+- make test、make build、git diff --check、go vet ./...、store/syncer/analysis 竞态测试及文档结构检查通过；后续进程锁修复另跑 cmd/workstation 回归与 vet 通过。
+- 合成 Chromium 桌面/390px 主链路通过，包括失败/过期/空 AI 状态、事实引用聚焦、HTML 安全文本展示。真实本机 Go 静态页面→49 张列表→详情→Jev/Bub→引用定位和窄屏检查通过。
+- 最新 Go 服务重启后仍有 49 张工单及两个样本的 Jev/Bub 成功历史；后续增量改变首个样本输入后，其旧总结被标过期且当前为待处理，未拿旧结果覆盖新输入。
+- 真实增量 search 返回 HTTP 403 (FORBIDDEN)，旧水位保持，不能认定具体 OAuth Scope 是原因。已实现并验证同一 Client 内缓存的固定 ID 详情回查：真实 49 个 ID 检查，fetched=1、failed=0、remaining=47；保留批次水位，未扩大部门或历史。完整批次游标行为由合成集成测试验证，本轮没有重复跑完全部真实会话。
+- Reviewer 指出的并行 analyze 命令误恢复活动请求已修：Linux 同数据库非阻塞文件锁覆盖恢复和整个调用过程；回归先观察失败再通过。不会丢弃仍在另一个分析进程处理的结果。
+
+## 消融与文档
+
+- 实际消融：移除无消费者的 State.Summary；前端删除字体/动画依赖，移除约 218 KB 字体产物，CSS 38.44→34.45 KB；相关测试及构建通过。
+- 实际简化：合并原始/规范化读取为单次 Get，删除独立 Raw 方法，既减少查询也避免版本混用；store/syncer 测试通过。
+- Python 删除单纯转发超时的包装函数；前端共用分析元数据类型，没有新增路由/状态库。
+- 保留固定诊断白名单，因为原始错误可能回显输入；不建设日志平台、消息队列、事件总线或通知模块。
+- 相关代码头、目录索引、命令和接口文档已同步；根只维护一份进度文件。
+
+## 未完成与下一步
+
+- Zoho 搜索端点本身仍被拒绝，固定 ID 回查已经可用，不构成本期受控同步阻塞；每轮最多 N 次详情读取，重叠窗口可能重复 Fetch，记录其代价而不虚称已比较本地版本。
+- 后续模型调用沿用 6 / 60 总预算及 development-1 的 6 / 20，不因下一 Goal 轮次自动清零。固定留出集尚未调用模型。
+- 接入单服务自动同步/独立分析调度、手动同步/重跑及合理访问边界；当前服务只提供查询，不自动后台采集或模型调用。
+- 列表待增加 Jev 优先级/情绪与 AI 状态；运行状态待增加待处理/失败数量及预算。
+- 完善自动恢复与有限重试，执行固定留出样本最终检查、最终集成验证及只读审查，之后才能判断完整 Goal 是否达标。
+- 当前服务预期监听 127.0.0.1:8080；活进程须重新查验，不凭本文件断言持续运行。最终 12 项标准尚未全部达成，Goal 保持 active。

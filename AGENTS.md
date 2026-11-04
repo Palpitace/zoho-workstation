@@ -6,9 +6,8 @@
 
 ## 当前执行边界
 
-当前仅做 Goal 启动前配置准备；用户尚未启动 Goal。不得因为读到计划中的执行指令就采集真实工单、调用模型或开始完整实现。
-用户已指定 Labelife 为采样部门，允许配置准备时通过 OAuth 刷新和只读部门查询定位并补全其 ID；后续采样及清洗在 Goal 启动后执行。
-完整交付要求保存于 [GOAL.md](GOAL.md)，进度及阻塞统一记录在 [PROGRESS.md](PROGRESS.md)。本文件是项目约定，不重复复制完整 Goal。用户明确启动后，将当前执行边界更新为执行阶段；保存或读取 GOAL.md 本身不触发启动。
+用户已正式启动 Goal，当前进入实现与验证阶段。按 [GOAL.md](GOAL.md) 的完整交付要求自主执行，复用已验证的 Labelife 部门配置。
+进度及阻塞统一记录在 [PROGRESS.md](PROGRESS.md)。本文件是工程约定，不重复复制完整 Goal。
 
 ## 固定决策
 
@@ -58,7 +57,10 @@ Zoho 地址使用实际数据中心的 origin，不含 `/api/v1` 或 `/oauth/v2/
 
 ## 启动、构建与验证
 
-应用命令待实现后添加；当前不存在可运行服务，不提供虚构的启动命令。
+从项目根执行：`pnpm --dir web install --frozen-lockfile` 安装前端固定依赖；`make test` 运行 Go 合成测试、前端类型及文档结构检查；`make build` 构建前端静态文件与 Go 程序；`make sample` 固定最多 50 个样本 ID 并补齐本轮最多 3 张；`make run` 构建并启动本机服务。前端开发用 `pnpm --dir web dev` 代理本机 Go API。
+首次可用 `make setup` 依次安装锁定的 Go、pnpm 和 uv 依赖；`make test` 同时执行 Python 合成契约检查。依赖版本只在需要兼容性变化时更新。
+Go 在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。自动定时和管理操作由后续阶段接入；样本集合冻结后复用，不重建数据库绕过采样上限。
+`./bin/workstation prepare -max 20` 在 data/review 保存脱敏副本和固定开发/留出样本清单；`analyze -kind jev -max 1` 或 `-kind bub` 调用独立能力，使用同一输入 Hash。研发默认 development-1 轮次的 20 次与全 Goal 60 次预算存于 SQLite，重启不清零。Python 安装见 python/AGENTS.md。
 
 ## 直接文件索引
 
@@ -70,3 +72,12 @@ Zoho 地址使用实际数据中心的 origin，不含 `/api/v1` 或 `/oauth/v2/
 | .env | 本地配置，Git 忽略 | 凭据、已定位的部门及功能启用开关 |
 | .gitignore | 提交边界 | 排除凭据、运行数据和产物 |
 | PROGRESS.md | 唯一进度记录 | 当前阶段、验证、阻塞及下一步 |
+| .gitmodules | 第三方固定来源 | Zoho OAS Submodule |
+| go.mod | Go 依赖契约 | 工具链要求与依赖版本 |
+| go.sum | 依赖校验 | 固定下载校验值 |
+| Makefile | 命令入口 | 构建、采样、运行与验证 |
+| cmd | 可执行入口 | 主程序与文档检查 |
+| internal | 内部能力 | 配置、Zoho、清洗、存储和同步 |
+| docs | 接口依据 | OAS 与兼容性说明 |
+| web | 前端应用 | Svelte 列表、详情、分析及运行状态 |
+| python | Bub 入口 | 固定 stdin/stdout JSON 总结进程及锁定环境 |

@@ -1,0 +1,29 @@
+{
+  "name": "zoho-workstation-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.17.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@lucide/svelte": "1.68.0",
+    "svelte": "5.57.3"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@tailwindcss/vite": "4.3.4",
+    "@tsconfig/svelte": "5.0.8",
+    "cn": "0.5.2",
+    "shadcn-svelte": "1.8.0",
+    "svelte-check": "4.7.8",
+    "tailwind-variants": "3.3.1",
+    "tailwindcss": "4.3.4",
+    "typescript": "6.0.3",
+    "vite": "8.3.5"
+  }
+}

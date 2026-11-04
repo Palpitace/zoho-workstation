@@ -1,0 +1,16 @@
+# input: Python 3.12+ 和公开 PyPI 稳定依赖。
+# output: 由 uv.lock 固定的无应用插件 Bub Core 运行环境。
+# pos: Python 总结入口的依赖声明。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
+[project]
+name = "zoho-workstation-summary"
+version = "0.1.0"
+requires-python = ">=3.12,<4"
+dependencies = [
+    "bub==0.6.1",
+    "republic==0.6.1",
+    "pydantic==2.14.2",
+]
+
+[tool.uv]
+package = false
+prerelease = "disallow"

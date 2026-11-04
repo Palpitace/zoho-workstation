@@ -1,0 +1,3 @@
+[submodule "docs/zoho-oas"]
+	path = docs/zoho-oas
+	url = https://github.com/zoho/zohodesk-oas
