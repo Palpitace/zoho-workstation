@@ -1,0 +1,28 @@
+# Local credentials; only the sanitized template is versioned.
+.env
+.env.*
+!.env.example
+
+# Runtime data, raw tickets, model inputs/outputs, caches and logs.
+/data/
+/logs/
+/raw/
+/samples/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+
+# Third-party installations and build outputs.
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.cache/
+.pytest_cache/
+.ruff_cache/
+dist/
+/bin/
