@@ -12,6 +12,12 @@
 
 当前工具链 Go 1.27.3 编译并测试。前端依赖与兼容性记录在 ../web/AGENTS.md，固定在 package.json/pnpm-lock.yaml；Python Bub/Republic 依据发布源码核实，固定版本与环境见 ../python/AGENTS.md。
 
+## 工程 Skills 核对
+
+2026-11-04 收尾时重新检查本机已安装 Skills，再读取 [Matt Pocock Skills 当前说明](https://github.com/mattpocock/skills)，确认不应重复安装来源。仓库当前提交为 `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`；本机现有 `tdd` 的 SKILL.md 与该提交 `skills/engineering/tdd/SKILL.md` 逐字相同，本项目实际复用其小步 RED→GREEN 工作流，没有重复安装或全量安装。
+
+同时查阅该提交的 code-review 与 codebase-design，按本项目范围核对规范/需求和接口简化。最小职责选择复用已有 tdd（小步实现及测试）、think（必要设计）、check（审查）、hunt（故障定位）、reclaim-code-entropy（简化）；安装存在不代表每个技能都已执行。项目明确的 GOAL.md、单一 PROGRESS.md、两子代理上限和预算优先，不新增工单平台、重复规则文档或运行时依赖。此记录证明本次核对，不伪称缺失的早期安装记录。
+
 ## Zoho API
 
 官方网页：https://desk.zoho.com/DeskAPIDocument 。本地依据为 zoho-oas/v1.0 下的 Ticket.json、Search.json、Thread.json、TicketComment.json 及引用文件。
@@ -35,6 +41,6 @@ Bub/Republic 使用当前稳定 0.6.1 的 Core SDK 发布源码核实，Python >
 
 ## 运行边界
 
-先在本机 127.0.0.1 提供查询服务。未来向其他机器开放时需明确管理接口访问控制，生产部署另行授权。
+Go 服务在本机 127.0.0.1 提供查询、受保护的同步/重跑入口和自动周期。POST 需同源临时令牌及允许的 Origin，Host 限本机；开发 Vite 代理重写 Host 并保留 Origin。同库同步/分析互斥使用当前 Linux 环境的 flock，移植到其他系统前须验证该边界。未来向其他机器开放时需明确管理接口访问控制，生产部署另行授权。
 真实工单、原始响应、脱敏副本、AI 输出只留本地 data/，不提交 Git。自动脱敏有已知限制，详见 internal/ticket/AGENTS.md。
 企业微信通知暂缓；将来只在单独授权后接入，不提前增加模块或表。

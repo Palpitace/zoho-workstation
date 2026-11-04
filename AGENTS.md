@@ -15,7 +15,7 @@
 - 前端 Svelte 5、TypeScript、Vite、shadcn-svelte、兼容的 Tailwind，按需 Lucide；生产静态资源由 Go 提供。
 - Bub 使用核实过的稳定 SDK，通过固定 Python 入口及 stdin/stdout JSON 与 Go 交互；stderr 日志、超时、有限并发，不拼接 Shell。
 - 运行需要 Go 服务及随附 Python 环境；Node 仅参与前端开发和构建。
-- Jev 与 Bub 独立处理同一脱敏会话快照；失败不能阻塞同步或查看，旧输入结果不能覆盖新输入结果。
+- Jev 与 Bub 使用同一版本的完整脱敏会话。先尝试 Jev，再向 Bub 附带同版本的可用评估作补充参考；Jev 关闭、失败或超时不阻止 Bub 独立总结。模型评估不是工单事实，不替代消息证据；不传过期评估，Bub 实际输入版本覆盖附带参考。失败不能阻塞同步或查看，旧输入结果不能覆盖新输入结果。
 - Jev 为 TypeSafe AI（https://typesafe.ai/），Go 直接调用其 HTTP API；Bub 为 https://bub.build/ 的 Python SDK，生成式模型供应商单独配置。
 - 用户选定 Bub 使用 DeepSeek 官方模型服务。BUB_MODEL 采用 Republic 的 provider:model 格式，地址和 Key 显式传入；仅使用无工具的 Core SDK，不加载 App 插件或持久化会话记忆。
 - Jev 按官方 Choice/Score/Noul 能力建模，不要求自由文本生成；客户诉求以明确标签及未知状态评估，具体内容保留原文。
@@ -33,7 +33,7 @@ Zoho 地址使用实际数据中心的 origin，不含 `/api/v1` 或 `/oauth/v2/
 
 - 部门是唯一业务筛选边界，不由模型丢弃工单；首次默认最多 50 张，未经进一步授权不得超过 100 张。
 - 用户选定 Labelife 部门，实际 ID 从本地 .env 读取；不因名称相似扩大到其他部门。
-- 准备阶段建议：采样限制按跨轮询和重启的累计唯一工单数计算；长期新增工单同步的起始范围在启用前明确，不默认回填历史。
+- 采样限制按跨轮询和重启的累计唯一工单数计算；长期新增工单同步的起始范围在启用前明确，不默认回填历史。
 - 只读业务接口；允许必要 OAuth 刷新。无通知订阅、Webhook 接收端或真实群消息。
 - 不覆盖用户改动，不删除已有数据，不做破坏性迁移，不推送、合并或部署生产。
 - 最多两个子代理加主协调者；Reviewer 默认只读，明确文件所有权。
@@ -59,8 +59,9 @@ Zoho 地址使用实际数据中心的 origin，不含 `/api/v1` 或 `/oauth/v2/
 
 从项目根执行：`pnpm --dir web install --frozen-lockfile` 安装前端固定依赖；`make test` 运行 Go 合成测试、前端类型及文档结构检查；`make build` 构建前端静态文件与 Go 程序；`make sample` 固定最多 50 个样本 ID 并补齐本轮最多 3 张；`make run` 构建并启动本机服务。前端开发用 `pnpm --dir web dev` 代理本机 Go API。
 首次可用 `make setup` 依次安装锁定的 Go、pnpm 和 uv 依赖；`make test` 同时执行 Python 合成契约检查。依赖版本只在需要兼容性变化时更新。
-Go 在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。自动定时和管理操作由后续阶段接入；样本集合冻结后复用，不重建数据库绕过采样上限。
-`./bin/workstation prepare -max 20` 在 data/review 保存脱敏副本和固定开发/留出样本清单；`analyze -kind jev -max 1` 或 `-kind bub` 调用独立能力，使用同一输入 Hash。研发默认 development-1 轮次的 20 次与全 Goal 60 次预算存于 SQLite，重启不清零。Python 安装见 python/AGENTS.md。
+Go 在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。服务启动后按 SYNC_INTERVAL 自动同步（每批最多 3 张）并独立调度 Jev/Bub；样本集合冻结后复用，不重建数据库绕过采样上限。
+页面提供 POST `/api/sync` 与 `/api/tickets/:id/analysis/:kind`，校验本机 Host、允许 Origin 与临时会话令牌。serve 持有同库同步/分析操作锁，运行期间使用页面操作；CLI sample/analyze 会拒绝并发写者。后台自动评估只选择固定开发集，留出样本不自动调用；模型预算耗尽继续同步和展示。详细状态/关闭约定见 internal/app/AGENTS.md。
+`./bin/workstation prepare -max 20` 在 data/review 保存脱敏副本和固定开发/留出样本清单；`analyze -kind jev -max 1` 或 `-kind bub` 调用所选能力。二者会话版本一致，Bub 实际输入 Hash 还覆盖可选评估参考。研发默认 development-1 轮次的 20 次与全 Goal 60 次预算存于 SQLite，重启不清零。Python 安装见 python/AGENTS.md。
 
 ## 直接文件索引
 

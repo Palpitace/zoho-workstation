@@ -1,5 +1,5 @@
 // input: Zoho OAuth 配置、限定部门与调用方 context。
-// output: 只读工单/会话及限定 ID 的增量权限回退；错误不含 Token 或正文。
+// output: 只读工单/会话及限定 ID 的增量候选和局部失败回退；错误不含 Token 或正文。
 // pos: Zoho HTTP 与本地采样的边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho
 
@@ -249,14 +249,26 @@ func (c *Client) changedMetadata(ctx context.Context, ids []string, since, until
 		seen[id] = true
 		body, err := c.get(ctx, "/tickets/"+id, nil)
 		if err != nil {
-			return nil, err
+			var response *responseError
+			local := errors.As(err, &response) && response.method == http.MethodGet &&
+				(response.status == http.StatusNotFound || response.status == http.StatusGone ||
+					(response.status == http.StatusForbidden && (response.code == "" || response.code == "FORBIDDEN" || response.code == "INSUFFICIENT_PRIVILEGES")))
+			if !local {
+				return nil, err
+			}
+			// Retry this original fixed ID through Fetch, which validates scope
+			// and lets syncer persist its failure without blocking other IDs.
+			changed = append(changed, id)
+			continue
 		}
 		if field(body, "id") != id || field(body, "departmentId") != c.cfg.DepartmentID {
-			return nil, errors.New("ticket identity or department mismatch")
+			changed = append(changed, id)
+			continue
 		}
 		modified, err := time.Parse(time.RFC3339Nano, field(body, "modifiedTime"))
 		if err != nil {
-			return nil, errors.New("ticket modified time missing or invalid")
+			changed = append(changed, id)
+			continue
 		}
 		if !modified.Before(since) && !modified.After(until) {
 			changed = append(changed, id)

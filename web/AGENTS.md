@@ -34,16 +34,20 @@ TypeScript latest 为 7.0.2，但 svelte-check 4.7.8 的 peerDependencies 仅接
 
 ## 命令与边界
 
-在本目录执行 `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm build`。`pnpm dev` 监听 127.0.0.1:5173，/api 代理到 127.0.0.1:8080；Go 端口不同须同步调整代理。生产输出为 web/dist，不需要生产 Node 服务。
+在本目录执行 `pnpm install --frozen-lockfile`、`pnpm check`、`pnpm build`。`pnpm dev` 监听 127.0.0.1:5173，/api 代理到 127.0.0.1:8080，并通过 changeOrigin 匹配 Go 的 Host/端口校验；浏览器 Origin 保持 5173，由 development 模式显式允许。Go 端口不同须同步调整代理。生产输出为 web/dist，不需要生产 Node 服务。
 
 ## API 契约
 
-- GET /api/status：sync（department_id、selected、ready、failed、watermark、batch_upper、last_attempt、last_error）及 jev_enabled/bub_enabled/wecom_enabled。ready 指已有快照，不表示完整成功，失败数量独立展示。
-- GET /api/tickets?q=&status=：返回 {data: TicketRecord[]}，列表使用 pending、sync_error、complete 显示保存和失败状态。
+- GET /api/status：sync 及 jev_enabled/bub_enabled/wecom_enabled；新增 csrf_token、runtime（各能力运行标记、automatic、ai_scope、ai_scope_count、last_error）、budget（total/round 及各自 limit）、ai（各能力 pending/running/failed/success/stale 数量）。ready 指已有快照，不表示完整成功。
+- GET /api/tickets?q=&status=：返回 {data: TicketRecord[]}，列表使用 pending、sync_error、complete 显示保存和失败状态；内嵌 ai.jev/ai.bub 包含 status、stale、automatic_eligible 及可用 priority/emotion/error。Jev 字段来自后端匹配当前输入的成功结果，不填充低优先级或中性情绪默认值；未纳入自动分析的 pending 明确标记。
 - GET /api/tickets/:id：返回 TicketRecord（快照字段及 sync_error、checked_at、pending），详情直接读取自己的同步状态，不依赖当前筛选列表，因此收藏链接或筛选后进入仍显示同步错误；不接收 Raw 原始响应。
-- GET /api/tickets/:id/analysis：返回 {jev:{current,success,stale},bub:{current,success,stale}}，分别展示真实结构化结果。Jev 的 success.result 含 model/answers，Bub 的 success.result 含 summary/usage/request_id。Bub summary 结构对应 Go bub-summary-v1；引用跳到当前会话的唯一消息并聚焦，缺失或重复引用不猜测。未增加逐列表行请求，避免 N+1。无结果、读取失败和过期分别展示。
+- GET /api/tickets/:id/analysis：返回 {jev:{current,success,stale},bub:{current,success,stale}}，分别展示真实结构化结果。Jev 的 success.result 含 model/answers，Bub 的 success.result 含 summary/usage/request_id。Bub 输入协议对应 Go bub-summary-v2，summary 输出结构保持兼容；引用跳到当前会话的唯一消息并聚焦，缺失或重复引用不猜测。未增加逐列表行请求，避免 N+1。无结果、读取失败和过期分别展示。
 
-所有请求同源，无 VITE_* 密钥，无前端数据库访问。刷新按钮只重新查询已有本地数据。当前无可用手动同步/重跑端点，因此不提供假操作。企业微信无页面或操作。
+- POST /api/sync 和 POST /api/tickets/:id/analysis/:kind：不发送 body，X-CSRF-Token 使用最近一次有效 status 响应的 csrf_token。202 {status:accepted} 只表示已受理；409 显示已有操作运行，其余失败显示服务提供的安全 error 字段。kind 仅 jev/bub，不自动重试 POST。
+
+所有请求同源，无 VITE_* 密钥，无前端数据库访问。csrf_token 是浏览器操作所需的会话防护值，仅保存在内存并随请求头发送，不显示、打印或写入持久化存储。刷新数据只查询本地 API；同步工单、重新评估、重新总结是明确区分的人工操作。能力关闭、运行中、提交中、缺有效状态或预算耗尽时禁用对应操作，原因可见；模型预算不阻塞同步与查看。企业微信无页面或操作。
+
+页面每 5 秒仅在可见时轮询轻量 status，避免并行轮询；仅同步/runtime/AI 数量/预算变化时刷新当前列表或当前详情，运行状态页不重新读取工单。无变化时不重复会话查询。未提交的搜索输入不被后台刷新提前应用。卸载时停止定时器并取消请求；预算和分析状态完全由 Go 提供，不因刷新或重启清零。
 
 ## 简化与验证
 
@@ -54,5 +58,9 @@ TypeScript latest 为 7.0.2，但 svelte-check 4.7.8 的 peerDependencies 仅接
 临时合成验证脚本、截图和浏览器配置位于被忽略的 .cache，非运行依赖，不新增测试框架或长期快照套件。生产代码不包含 Mock 数据。
 
 Bub 增量的设计简化检查：共用 AnalysisRun/AnalysisView 元数据类型，结果结构仍各自明确；引用作为单个组件内 snippet 复用，不新增引用路由、全局状态或弹窗系统。保留独立展示组件以防评估与总结职责混合。
+
+操作增量的设计简化检查：继续使用 App 本地状态和一个 status 定时器，列表直接使用内嵌 AI 摘要，不逐行读取 analysis；没有引入状态管理库、请求缓存框架、操作队列或预算副本。
+
+操作增量已通过相同合成浏览器链路：列表建议/未知值和自动分析资格、手动同步/独立模型 POST 的 CSRF 头、202 受理、409 冲突及 503 安全错误、单能力运行禁用、预算耗尽不阻塞同步、invalid 本地输入错误保留成功结果。连续空闲周期只新增 status GET，没有列表请求或 POST；桌面和 390px 页面无横向溢出。另用关闭 env 加载的隔离 Vite 代理与合成 HTTP 服务验证目标 Host 重写、浏览器 Origin/CSRF 头保留。最终类型检查 0 错误 0 警告、build 和文档检查通过，未调用真实服务或模型。
 
 Bub 增量已通过同一合成浏览器主链路：建议/客户确认执行/执行未知、客户报告结果/结果未知、模型建议/待验证假设、失败保留成功及过期标记、无结果待总结、失败无成功结果、旧消息引用缺失，以及引用点击后滚动并聚焦且 hash 路由不变。补充验证筛选列表不含目标票时，详情仍显示自身同步错误。桌面与窄屏无溢出，最终 `pnpm check` 为 0 错误 0 警告，`pnpm build` 与文档结构检查通过。未调用真实模型或读取真实工单。

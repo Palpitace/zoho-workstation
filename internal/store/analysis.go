@@ -1,5 +1,5 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 独立追加的分析记录、成功结果保留和跨重启研发调用预算。
+// output: 独立分析记录、本地校验失败、成功结果保留和跨重启研发调用预算。
 // pos: SQLite AI 结果与调用额度边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -9,6 +9,8 @@ import (
 	"errors"
 	"time"
 )
+
+var ErrAnalysisBudget = errors.New("development model request budget exhausted")
 
 type AnalysisRequest struct {
 	TicketID       string `json:"ticket_id"`
@@ -32,6 +34,8 @@ type AnalysisView struct {
 	Current *AnalysisRun `json:"current"`
 	Success *AnalysisRun `json:"success"`
 	Stale   bool         `json:"stale"`
+	// Derived from matching history, so a retry cannot re-block Bub after failure.
+	HasFinishedAttempt bool `json:"-"`
 }
 type Budget struct {
 	Total int `json:"total"`
@@ -40,8 +44,25 @@ type Budget struct {
 
 func (s *Store) AnalysisBudget(ctx context.Context, round string) (Budget, error) {
 	var b Budget
-	err := s.db.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(round=?),0) FROM ai_runs", round).Scan(&b.Total, &b.Round)
+	err := s.db.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(round=?),0) FROM ai_runs WHERE status!='invalid'", round).Scan(&b.Total, &b.Round)
 	return b, err
+}
+
+// RecordAnalysisFailure records a local rejection before any provider request.
+// The caller supplies a safe error without credentials or ticket content.
+func (s *Store) RecordAnalysisFailure(ctx context.Context, req AnalysisRequest, failure error) error {
+	if failure == nil {
+		return errors.New("local analysis failure is required")
+	}
+	if (req.Kind != "jev" && req.Kind != "bub") || req.InputHash == "" || req.SchemaVersion == "" || req.RequestedModel == "" || req.Round == "" {
+		return errors.New("analysis metadata incomplete")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO ai_runs(ticket_id,kind,input_hash,schema_version,requested_model,round,status,started_at,completed_at,error)
+		SELECT ?,?,?,?,?,?,'invalid',?,?,? WHERE NOT EXISTS (
+			SELECT 1 FROM ai_runs WHERE ticket_id=? AND kind=? AND input_hash=? AND schema_version=? AND requested_model=? AND status='invalid'
+		)`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel, req.Round, now, now, failure.Error(), req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel)
+	return err
 }
 
 // StartAnalysis reserves the attempt before network access. Interrupted attempts
@@ -56,20 +77,20 @@ func (s *Store) StartAnalysis(ctx context.Context, req AnalysisRequest, force bo
 		return run, false, err
 	}
 	defer tx.Rollback()
-	var running, success, failures int
-	err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(status='running'),0),coalesce(sum(status='success'),0),coalesce(sum(status='failed'),0) FROM ai_runs WHERE ticket_id=? AND kind=? AND input_hash=? AND schema_version=? AND requested_model=?`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel).Scan(&running, &success, &failures)
+	var running, success, failures, invalid int
+	err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(status='running'),0),coalesce(sum(status='success'),0),coalesce(sum(status='failed'),0),coalesce(sum(status='invalid'),0) FROM ai_runs WHERE ticket_id=? AND kind=? AND input_hash=? AND schema_version=? AND requested_model=?`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel).Scan(&running, &success, &failures, &invalid)
 	if err != nil {
 		return run, false, err
 	}
-	if running > 0 || (!force && (success > 0 || failures >= 2)) {
+	if running > 0 || (!force && (success > 0 || failures >= 2 || invalid > 0)) {
 		return run, false, nil
 	}
 	var total, round int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(round=?),0) FROM ai_runs", req.Round).Scan(&total, &round); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(round=?),0) FROM ai_runs WHERE status!='invalid'", req.Round).Scan(&total, &round); err != nil {
 		return run, false, err
 	}
 	if total >= 60 || round >= 20 {
-		return run, false, errors.New("development model request budget exhausted")
+		return run, false, ErrAnalysisBudget
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO ai_runs(ticket_id,kind,input_hash,schema_version,requested_model,round,status,started_at) VALUES(?,?,?,?,?,?,'running',?)`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel, req.Round, run.StartedAt)
 	if err != nil {
@@ -121,6 +142,9 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 		}
 		r.Result = json.RawMessage(body)
 		matches := r.InputHash == req.InputHash && r.SchemaVersion == req.SchemaVersion && r.RequestedModel == req.RequestedModel
+		if matches && r.Status != "running" {
+			view.HasFinishedAttempt = true
+		}
 		if matches && view.Current == nil {
 			copy := r
 			view.Current = &copy

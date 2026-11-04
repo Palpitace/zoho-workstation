@@ -1,5 +1,5 @@
-// input: 同源 Go HTTP API 的 JSON 响应。
-// output: 工单、消息、独立分析结果及运行状态类型和可取消的只读请求。
+// input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
+// output: 工单/分析状态类型、可取消查询及受保护的人工操作请求。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -42,7 +42,20 @@ export type TicketRecord = Ticket & {
   pending: boolean;
   sync_error?: string;
   checked_at?: string;
+  ai?: Record<AIKind, AIState>;
 };
+
+export type AIKind = "jev" | "bub";
+export type Operation = "sync" | AIKind;
+export type AIState = {
+  status: "pending" | "running" | "failed" | "success" | "disabled" | "budget_exhausted";
+  stale: boolean;
+  automatic_eligible?: boolean;
+  priority?: string;
+  emotion?: string;
+  error?: string;
+};
+type AICounts = { pending: number; running: number; failed: number; success: number; stale: number };
 
 export type SystemStatus = {
   sync: {
@@ -58,6 +71,18 @@ export type SystemStatus = {
   jev_enabled: boolean;
   bub_enabled: boolean;
   wecom_enabled: boolean;
+  csrf_token: string;
+  runtime: {
+    sync_running: boolean;
+    jev_running: boolean;
+    bub_running: boolean;
+    automatic: boolean;
+    ai_scope: string;
+    ai_scope_count?: number;
+    last_error: Partial<Record<Operation, string>>;
+  };
+  budget: { total: number; round: number; total_limit: number; round_limit: number };
+  ai: Record<AIKind, AICounts>;
 };
 
 export type AnalysisRun<Result> = {
@@ -103,6 +128,30 @@ export async function getJSON<T>(path: string, signal: AbortSignal): Promise<T> 
     throw new Error("无法读取服务数据，请确认本机 Go 服务正在运行。");
   }
   return response.json() as Promise<T>;
+}
+
+export async function postAction(path: string, token: string, signal: AbortSignal): Promise<void> {
+  const response = await fetch(path, { method: "POST", signal, headers: { "X-CSRF-Token": token, Accept: "application/json" } });
+  const body: { status?: string; error?: string } = response.headers.get("content-type")?.includes("application/json") ? await response.json() : {};
+  if (response.status === 202 && body.status === "accepted") return;
+  if (response.status === 409) throw new Error("操作已在运行，请等待完成。");
+  throw new Error(typeof body.error === "string" ? body.error : `操作未受理（HTTP ${response.status}），请刷新后重试。`);
+}
+
+export function aiLabel(value?: AIState): string {
+  const labels = { pending: "待处理", running: "处理中", failed: "失败", success: "已完成", disabled: "已关闭", budget_exhausted: "预算耗尽" };
+  if (value?.status === "pending" && value.automatic_eligible === false) return "未纳入自动分析";
+  return value ? labels[value.status] || "状态未知" : "未读取";
+}
+
+export type ActionFeedback = { blocked: string; error: string; notice: string };
+
+export function jevChoice(field: "priority" | "emotion", value?: string): string {
+  const labels: Record<string, Record<string, string>> = {
+    priority: { low: "低", normal: "常规", high: "高", urgent: "紧急" },
+    emotion: { positive: "积极", neutral: "中性", frustrated: "沮丧 / 焦虑", angry: "愤怒" },
+  };
+  return labels[field][value || ""] || "未知";
 }
 
 export function dateTime(value?: string): string {

@@ -1,14 +1,14 @@
-<!-- input: 浏览器 hash 导航与 Go 只读查询 API。 -->
-<!-- output: 工单列表、详情和运行状态的应用外壳。 -->
+<!-- input: 浏览器导航、Go 查询/操作 API 及会话防护令牌。 -->
+<!-- output: 工单界面、受控人工操作及可见页面的轻量进度刷新。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { Activity, Inbox, RefreshCw } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import TicketList from "$lib/TicketList.svelte";
   import TicketDetail from "$lib/TicketDetail.svelte";
   import RunStatus from "$lib/RunStatus.svelte";
-  import { getJSON, type TicketRecord, type SystemStatus, type JevView, type BubView } from "$lib/api";
+  import { getJSON, postAction, type TicketRecord, type SystemStatus, type JevView, type BubView, type AIKind, type Operation } from "$lib/api";
 
   let hash = $state(window.location.hash);
   const ticketID = $derived(hash.startsWith("#/tickets/") ? hash.slice("#/tickets/".length) : "");
@@ -29,45 +29,111 @@
   let statusError = $state("");
   let detailError = $state("");
   let revision = $state(0);
+  let submitting = $state({ sync: false, jev: false, bub: false });
+  let actionErrors = $state({ sync: "", jev: "", bub: "" });
+  let notices = $state({ sync: "", jev: "", bub: "" });
   let controller: AbortController | undefined;
+  let pollController: AbortController | undefined;
+  let refreshing = false;
+  let polling = false;
+  let appliedQuery = "";
+  let appliedStatusFilter = "";
+  const actionRequests = new Map<Operation, AbortController>();
 
   function errorText(error: unknown): string {
     return error instanceof Error && error.name !== "TypeError" ? error.message : "无法连接本机服务，请确认服务已启动后重试。";
   }
 
-  async function refresh() {
+  function blocked(kind: Operation): string {
+    if (!status?.csrf_token || statusError) return "等待有效运行状态";
+    if (submitting[kind]) return "正在提交请求";
+    if (status.runtime?.[`${kind}_running`]) return "任务进行中";
+    if (kind === "sync") return "";
+    if (!status[`${kind}_enabled`]) return "能力已关闭";
+    if (!detail || detail.pending) return "工单尚未保存";
+    if ((kind === "jev" ? jev : bub)?.current?.status === "running") return "任务进行中";
+    if (!status.budget) return "等待调用预算";
+    if (status.budget.total >= status.budget.total_limit || status.budget.round >= status.budget.round_limit || detail.ai?.[kind].status === "budget_exhausted") return "研发预算已耗尽";
+    return "";
+  }
+  const controls = $derived({
+    jev: { blocked: blocked("jev"), error: actionErrors.jev, notice: notices.jev },
+    bub: { blocked: blocked("bub"), error: actionErrors.bub, notice: notices.bub },
+  });
+
+  async function refresh(silent = false, knownStatus?: SystemStatus) {
+    if (silent && refreshing) return;
+    if (!knownStatus) pollController?.abort();
     controller?.abort();
     controller = new AbortController();
     const signal = controller.signal;
-    loading = true;
-    listError = statusError = "";
-    const params = new URLSearchParams({ q: query, status: statusFilter });
+    refreshing = true;
+    loading = !silent;
+    if (!silent) { appliedQuery = query; appliedStatusFilter = statusFilter; }
+    const params = new URLSearchParams({ q: appliedQuery, status: appliedStatusFilter });
     const [ticketsResult, statusResult] = await Promise.allSettled([
-      getJSON<{ data: TicketRecord[] }>(`/api/tickets?${params}`, signal),
-      getJSON<SystemStatus>("/api/status", signal),
+      !ticketID && !statusPage ? getJSON<{ data: TicketRecord[] }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
+      knownStatus ? Promise.resolve(knownStatus) : getJSON<SystemStatus>("/api/status", signal),
     ]);
     if (signal.aborted) return;
-    if (ticketsResult.status === "fulfilled") {
+    if (ticketsResult.status === "fulfilled" && ticketsResult.value) {
       records = ticketsResult.value.data;
       statusOptions = [...new Set([...statusOptions, ...records.map((record) => record.status).filter(Boolean)])].sort();
-    } else listError = errorText(ticketsResult.reason);
-    if (statusResult.status === "fulfilled") status = statusResult.value;
+      listError = "";
+    } else if (ticketsResult.status === "rejected") listError = errorText(ticketsResult.reason);
+    if (statusResult.status === "fulfilled") { status = statusResult.value; statusError = ""; }
     else statusError = errorText(statusResult.reason);
-    loading = false;
+    loading = refreshing = false;
     revision++;
+  }
+
+  function progress(value: SystemStatus | null): string {
+    return JSON.stringify(value ? { sync: value.sync, runtime: value.runtime, ai: value.ai, budget: value.budget } : null);
+  }
+  async function poll() {
+    if (document.visibilityState !== "visible" || polling || refreshing || detailLoading || analysisLoading) return;
+    polling = true;
+    pollController = new AbortController();
+    const signal = pollController.signal;
+    try {
+      const next = await getJSON<SystemStatus>("/api/status", signal);
+      if (signal.aborted) return;
+      const changed = progress(next) !== progress(status);
+      status = next;
+      statusError = "";
+      if (changed && !statusPage) await refresh(true, next);
+    } catch (error) { if (!signal.aborted) statusError = errorText(error); }
+    finally { polling = false; }
+  }
+
+  async function operate(kind: Operation) {
+    if (blocked(kind)) return;
+    const selected = ticketID;
+    const request = new AbortController();
+    actionRequests.set(kind, request);
+    submitting[kind] = true;
+    actionErrors[kind] = notices[kind] = "";
+    try {
+      await postAction(kind === "sync" ? "/api/sync" : `/api/tickets/${selected}/analysis/${kind}`, status!.csrf_token, request.signal);
+      if (!request.signal.aborted && (kind === "sync" || selected === ticketID)) notices[kind] = "请求已受理，完成情况请查看处理状态。";
+    } catch (error) {
+      if (!request.signal.aborted && (kind === "sync" || selected === ticketID)) actionErrors[kind] = errorText(error);
+    } finally {
+      if (!request.signal.aborted) await refresh(true);
+      submitting[kind] = false;
+      actionRequests.delete(kind);
+    }
   }
 
   $effect(() => {
     const id = ticketID;
     revision;
-    detail = null;
-    jev = null;
-    bub = null;
-    detailError = "";
-    analysisError = "";
+    const sameTicket = untrack(() => detail !== null && encodeURIComponent(detail.id) === id);
+    if (!sameTicket) { detail = null; jev = null; bub = null; }
+    detailError = analysisError = "";
     if (!id) { detailLoading = analysisLoading = false; return; }
     const request = new AbortController();
-    detailLoading = true;
+    detailLoading = !sameTicket;
     analysisLoading = true;
     getJSON<TicketRecord>(`/api/tickets/${id}`, request.signal)
       .then((value) => { if (!request.signal.aborted) detail = value; })
@@ -81,10 +147,22 @@
   });
 
   onMount(() => {
-    const navigate = () => { hash = window.location.hash; };
+    const navigate = () => {
+      hash = window.location.hash;
+      actionErrors.jev = actionErrors.bub = notices.jev = notices.bub = "";
+      if (!hash.startsWith("#/tickets/") && hash !== "#/status") refresh(true);
+    };
     window.addEventListener("hashchange", navigate);
+    document.addEventListener("visibilitychange", poll);
+    const timer = window.setInterval(poll, 5000);
     refresh();
-    return () => { window.removeEventListener("hashchange", navigate); controller?.abort(); };
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("hashchange", navigate);
+      document.removeEventListener("visibilitychange", poll);
+      controller?.abort(); pollController?.abort();
+      for (const request of actionRequests.values()) request.abort();
+    };
   });
 </script>
 
@@ -101,9 +179,14 @@
   <div class="min-w-0">
     <header class="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b px-5 py-3 lg:px-8">
       <span class="text-sm text-muted-foreground">{statusPage ? "运行状态" : ticketID ? "工单 / 详情" : "工单 / 列表"}</span>
-      <Button variant="outline" class="h-10" onclick={refresh} disabled={loading || detailLoading}><RefreshCw size={15} aria-hidden="true" />{loading ? "正在刷新…" : "刷新数据"}</Button>
+      <div class="flex flex-wrap gap-2">
+        <Button variant="outline" class="h-10" onclick={() => refresh()} disabled={loading || detailLoading}><RefreshCw size={15} aria-hidden="true" />{loading ? "正在刷新…" : "刷新数据"}</Button>
+        <Button class="h-10" onclick={() => operate("sync")} disabled={!!blocked("sync")} title={blocked("sync") || "从 Zoho 只读同步固定工单样本"}>{status?.runtime?.sync_running ? "同步进行中" : submitting.sync ? "正在提交…" : "同步工单"}</Button>
+      </div>
     </header>
     <main id="main-content" tabindex="-1" class="mx-auto max-w-7xl p-5 outline-none lg:p-8">
+      {#if actionErrors.sync}<p role="alert" class="mb-5 text-sm text-destructive">同步操作：{actionErrors.sync}</p>{/if}
+      {#if notices.sync}<p role="status" class="mb-5 text-sm text-muted-foreground">同步操作：{notices.sync}</p>{/if}
       {#if !statusPage && status}
         <dl class="mb-7 flex flex-wrap gap-x-7 gap-y-2 border-b pb-5 text-sm text-muted-foreground">
           <div class="flex gap-2"><dt>已选取</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.selected}</dd></div>
@@ -116,9 +199,9 @@
       {#if statusPage}
         <RunStatus {status} {loading} error={statusError} />
       {:else if ticketID}
-        <TicketDetail ticket={detail} loading={detailLoading} error={detailError} {jev} {bub} {analysisLoading} {analysisError} />
+        <TicketDetail ticket={detail} loading={detailLoading} error={detailError} {jev} {bub} {analysisLoading} {analysisError} {controls} onRerun={(kind: AIKind) => operate(kind)} />
       {:else}
-        <TicketList {records} {loading} error={listError} bind:query bind:statusFilter {statusOptions} onSearch={refresh} />
+        <TicketList {records} {loading} error={listError} bind:query bind:statusFilter {statusOptions} onSearch={() => refresh()} />
       {/if}
     </main>
   </div>

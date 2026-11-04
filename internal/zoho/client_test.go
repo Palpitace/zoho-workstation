@@ -1,5 +1,5 @@
 // input: 合成 Zoho HTTP 响应及隔离 httptest 服务。
-// output: 分页、限定 ID 权限回退、完整线程及错误脱敏的行为证据。
+// output: 分页、限定 ID 局部/全局失败边界、完整线程及错误脱敏的行为证据。
 // pos: 外部 API 边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho_test
 
@@ -76,10 +76,13 @@ func TestChangedStaysInsideFrozenSample(t *testing.T) {
 		{name: "403 falls back and caches only fixed metadata", mode: "fallback", want: []string{"2"}, searches: 1, details: 4, repeat: true},
 		{name: "metadata bounds are inclusive", mode: "boundaries", want: []string{"1", "2"}, searches: 1, details: 2},
 		{name: "outside window is unchanged", mode: "outside_window", want: []string{}, searches: 1, details: 2},
-		{name: "metadata cannot cross department", mode: "metadata_department", wantError: "identity or department mismatch", searches: 1, details: 2},
-		{name: "metadata cannot replace requested ID", mode: "metadata_id", wantError: "identity or department mismatch", searches: 1, details: 2},
-		{name: "invalid metadata time fails closed", mode: "metadata_time", wantError: "modified time", searches: 1, details: 2},
-		{name: "metadata refusal remains sanitized", mode: "metadata_denied", wantError: "OAUTH_SCOPE_MISMATCH", searches: 1, details: 2},
+		{name: "moved metadata requires scope-checked Fetch", mode: "metadata_department", want: []string{"2"}, searches: 1, details: 2},
+		{name: "wrong metadata ID retries only original fixed ID", mode: "metadata_id", want: []string{"2"}, searches: 1, details: 2},
+		{name: "invalid metadata time requires complete Fetch", mode: "metadata_time", want: []string{"2"}, searches: 1, details: 2},
+		{name: "local metadata absence requires complete Fetch", mode: "metadata_not_found", want: []string{"2"}, searches: 1, details: 2},
+		{name: "local metadata refusal requires complete Fetch", mode: "metadata_forbidden", want: []string{"2"}, searches: 1, details: 2},
+		{name: "global metadata scope refusal remains sanitized", mode: "metadata_denied", wantError: "OAUTH_SCOPE_MISMATCH", searches: 1, details: 2},
+		{name: "metadata server failure remains global", mode: "metadata_server", wantError: "remote HTTP 500", searches: 1, details: 2},
 		{name: "over fifty IDs rejected before reads", ids: tooMany, wantError: "invalid incremental scope"},
 	}
 	for _, tc := range cases {
@@ -149,6 +152,16 @@ func TestChangedStaysInsideFrozenSample(t *testing.T) {
 							id = "3"
 						case "metadata_time":
 							modified = "invalid"
+						case "metadata_not_found":
+							w.WriteHeader(http.StatusNotFound)
+							return
+						case "metadata_forbidden":
+							w.WriteHeader(http.StatusForbidden)
+							fmt.Fprint(w, `{"errorCode":"FORBIDDEN","message":"SECRET INPUT"}`)
+							return
+						case "metadata_server":
+							w.WriteHeader(http.StatusInternalServerError)
+							return
 						case "metadata_denied":
 							w.WriteHeader(http.StatusForbidden)
 							fmt.Fprint(w, `{"errorCode":"OAUTH_SCOPE_MISMATCH","message":"SECRET INPUT"}`)

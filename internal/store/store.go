@@ -1,5 +1,5 @@
 // input: SQLite 路径、固定部门和原始/规范化工单快照。
-// output: 持久化样本名额、工单快照与同步进度，支持幂等恢复。
+// output: 持久化样本、同步尝试时间与进度，以及同一数据库的同步/分析进程锁。
 // pos: Go 独占数据库边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -11,15 +11,19 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite"
 	"zoho-workstation/internal/ticket"
 )
 
+var ErrBusy = errors.New("operation is already running for this database")
+
 type Store struct {
 	db         *sql.DB
 	department string
+	path       string
 }
 
 type State struct {
@@ -49,7 +53,11 @@ func Open(path, department string) (*Store, error) {
 		return nil, err
 	}
 	f.Close()
-	u := url.URL{Scheme: "file", Path: abs}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, err
+	}
+	u := url.URL{Scheme: "file", Path: canonical}
 	q := url.Values{"_pragma": {"busy_timeout(5000)", "journal_mode(WAL)", "foreign_keys(1)"}}
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("sqlite", u.String())
@@ -57,7 +65,7 @@ func Open(path, department string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{db: db, department: department}
+	s := &Store{db: db, department: department, path: canonical}
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS sync_state (
 		id INTEGER PRIMARY KEY CHECK(id=1), department TEXT NOT NULL, frozen INTEGER NOT NULL DEFAULT 0,
 		watermark TEXT NOT NULL DEFAULT '', last_attempt TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
@@ -108,6 +116,30 @@ func Open(path, department string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// Lock prevents concurrent writers of one operation on the current Linux target.
+// Callers hold the returned release function until the operation ends. The
+// kernel also releases the lock when the process exits, including after a crash.
+func (s *Store) Lock(operation string) (func(), error) {
+	if operation != "sync" && operation != "analysis" {
+		return nil, errors.New("unsupported operation lock")
+	}
+	lock, err := os.OpenFile(s.path+"."+operation+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, errors.New("operation lock unavailable")
+	}
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, ErrBusy
+		}
+		return nil, errors.New("cannot acquire operation lock")
+	}
+	return func() {
+		syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		lock.Close()
+	}, nil
+}
 
 // Reserve freezes the sample before any detail reads; retries cannot replace failed IDs.
 func (s *Store) Reserve(ctx context.Context, ids []string) error {
@@ -197,16 +229,20 @@ func (s *Store) Save(ctx context.Context, raw ticket.RawSnapshot, snapshot ticke
 }
 
 func (s *Store) Failure(ctx context.Context, id, message string) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE tickets SET sync_error=? WHERE id=?", message, id)
+	_, err := s.db.ExecContext(ctx, "UPDATE tickets SET sync_error=?,checked_at=? WHERE id=?", message, time.Now().UTC().Format(time.RFC3339Nano), id)
 	return err
 }
 
 func (s *Store) Get(ctx context.Context, id string) (Record, error) {
-	var record Record
+	record := Record{Snapshot: ticket.Snapshot{ID: id}}
 	var body, raw []byte
-	err := s.db.QueryRowContext(ctx, "SELECT snapshot_json,raw_json,sync_error,checked_at FROM tickets WHERE id=? AND snapshot_json IS NOT NULL", id).Scan(&body, &raw, &record.SyncError, &record.CheckedAt)
+	err := s.db.QueryRowContext(ctx, "SELECT snapshot_json,raw_json,sync_error,checked_at FROM tickets WHERE id=?", id).Scan(&body, &raw, &record.SyncError, &record.CheckedAt)
 	if err != nil {
 		return record, err
+	}
+	if body == nil {
+		record.Pending = true
+		return record, nil
 	}
 	if err = json.Unmarshal(body, &record.Snapshot); err != nil {
 		return record, err

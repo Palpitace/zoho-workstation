@@ -1,5 +1,5 @@
-<!-- input: Go 工单记录、查询条件和重新查询回调。 -->
-<!-- output: 可搜索筛选的工单列表及真实同步状态。 -->
+<!-- input: Go 工单记录及附带 AI 状态、查询条件和查询回调。 -->
+<!-- output: 可搜索筛选的列表、Jev 建议及独立同步和分析状态。 -->
 <!-- pos: 工单列表页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Search } from "@lucide/svelte";
@@ -7,7 +7,8 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
   import * as Table from "$lib/components/ui/table/index.js";
-  import { dateTime, syncLabel, type TicketRecord } from "./api";
+  import { aiLabel, dateTime, jevChoice, syncLabel, type TicketRecord, type AIKind } from "./api";
+  const kinds: AIKind[] = ["jev", "bub"];
 
   let { records, loading, error, query = $bindable(""), statusFilter = $bindable(""), statusOptions, onSearch }: {
     records: TicketRecord[]; loading: boolean; error: string; query?: string;
@@ -51,7 +52,9 @@
           <Table.Head>状态</Table.Head>
           <Table.Head class="min-w-32">产品</Table.Head>
           <Table.Head class="min-w-40">更新时间</Table.Head>
-          <Table.Head class="pr-5">同步</Table.Head>
+          <Table.Head>同步</Table.Head>
+          <Table.Head class="min-w-36">Jev 建议</Table.Head>
+          <Table.Head class="min-w-44 pr-5">AI 处理状态</Table.Head>
         </Table.Row>
       </Table.Header>
       <Table.Body>
@@ -66,10 +69,16 @@
             <Table.Cell><Badge variant="outline">{record.status || "未知"}</Badge></Table.Cell>
             <Table.Cell class="max-w-52 whitespace-normal break-words text-muted-foreground">{record.product || "未提供"}</Table.Cell>
             <Table.Cell class="text-sm text-muted-foreground tabular-nums">{dateTime(record.modified_time)}</Table.Cell>
-            <Table.Cell class="pr-5"><Badge variant={record.sync_error ? "destructive" : "secondary"}>{syncLabel(record)}</Badge></Table.Cell>
+            <Table.Cell><Badge variant={record.sync_error ? "destructive" : "secondary"}>{syncLabel(record)}</Badge></Table.Cell>
+            <Table.Cell class="space-y-1 text-xs"><div>优先级：{jevChoice("priority", record.ai?.jev.priority)}</div><div>情绪：{jevChoice("emotion", record.ai?.jev.emotion)}</div></Table.Cell>
+            <Table.Cell class="space-y-2 pr-5">
+              {#each kinds as kind}
+                <div class="flex flex-wrap items-center gap-2 text-xs"><span>{kind === "jev" ? "Jev" : "Bub"}</span><Badge variant={record.ai?.[kind].status === "failed" ? "destructive" : "secondary"}>{aiLabel(record.ai?.[kind])}</Badge>{#if record.ai?.[kind].stale}<Badge variant="outline">过期</Badge>{/if}</div>
+              {/each}
+            </Table.Cell>
           </Table.Row>
         {:else}
-          <Table.Row><Table.Cell colspan={5} class="h-36 text-center text-muted-foreground">
+          <Table.Row><Table.Cell colspan={7} class="h-36 text-center text-muted-foreground">
             {loading ? "正在加载…" : error ? "暂无可显示数据。" : query || statusFilter ? "没有符合条件的工单，请调整搜索或状态。" : "尚未同步工单。同步完成后会显示在这里。"}
           </Table.Cell></Table.Row>
         {/each}

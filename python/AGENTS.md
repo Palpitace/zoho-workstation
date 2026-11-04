@@ -1,12 +1,15 @@
 一旦我所属的文件夹有所变化请更新我。
 
 本目录负责固定 Python stdin/stdout 总结入口与锁定的 Bub Core 环境。
-模块关系：Go 发送最小配置和共享脱敏快照，本目录返回校验后的 JSON，Go 再次校验并持久化。
+模块关系：Go 发送完整脱敏会话和可选同版本 Jev 参考，本目录返回校验后的 JSON，Go 再次校验并持久化。
 不负责数据库、Zoho、工具执行、插件、持久会话记忆、Web 服务或企业微信。
 
 ## 协议和运行
 
-输入只有 `{input:<脱敏快照>,config:{api_base,api_key,model},schema_version:"bub-summary-v1"}`。
+输入只有 `{input:<完整脱敏会话及可选参考>,config:{api_base,api_key,model},schema_version:"bub-summary-v2"}`。
+input 保持 messages、主题、描述等字段平面结构，必有 `conversation_hash`（附参考之前的会话版本）和 `jev_reference`；无可用评估时参考显式为 null，不阻止独立总结。
+非空参考只允许 `{kind:"model_assessment",run_id,conversation_hash,schema_version,requested_model,returned_model,choices:{字段:标签字符串}}`，不接收额外自由文本或概率字段。参考 Hash 必须与 input.conversation_hash 相同，不一致返回安全诊断 `reference_version_mismatch`；Go 负责筛选当前有效评估。
+完整会话与独立参考一同传入无工具 SDK，参考不变成消息或事实，不进入可引用消息 ID 集。Prompt 要求原文优先、缺少证据时承认未知，不能因 Jev 参考推定客户已执行或缺陷已确认，也不让 Bub 重新执行 Jev 评估。
 配置不从 `.env` 或其他文件加载；模型必须是 `deepseek:模型名`，地址与 Key 显式传入，拒绝空值以避免 SDK 环境回退。
 成功输出 `{ok:true,result,returned_model,request_id,usage}`；失败输出 `{ok:false,error:<固定错误码>,diagnostics?:[{loc,type,code}]}` 并以非零状态退出。
 已经取得供应商 Response 时，即使本地结构、引用或截断校验失败，错误输出也保留 `returned_model`、`request_id` 和 `usage`，不包含原文；认证/网络失败尚无 Response 时这些信息未知，不用请求模型补造。
@@ -42,19 +45,21 @@ Republic `output_schema` 在 Chat 格式下会生成 `json_schema`，当前 Deep
 固定结构区分建议、客户确认执行和客户报告结果；客户结果必须对应已确认执行。混合作者转录的真实归属仍由模型依据正文判断。
 本地验证只证明枚举、引用和部分角色约束，不证明模型没有事实错误。没有真实模型验证时不能声称真实接入已完成。
 
-已执行验证：单个合成契约测试通过；仅 PATH 的最小环境下 SDK 导入和构造成功，不依赖 HOME 或额外 CA 环境变量；非法 stdin 只返回固定错误码。
+已执行验证：合成契约测试通过；仅 PATH 的最小环境下 SDK 导入和构造成功，不依赖 HOME 或额外 CA 环境变量；非法 stdin 只返回固定错误码。
 使用安装后的 Bub/Republic 与本地 HTTPX2 MockTransport 完成一次流式验证：只请求一次、没有 tools、使用 JSON 模式，并保留返回模型、request_id 和用量；未调用外部模型。
 安全诊断验证覆盖非法引用、客户执行证据缺失、执行/结果冲突，以及任意额外字段名和输入值不回显；另以 SDK Mock 流确认截断只产生固定 `output_truncated` 码。
 第二个合成 SDK 边界测试覆盖结构、引用及截断失败后仍保留实际返回模型、请求 ID 和用量，同时排除原文和 Key；使用 MockTransport，不调用外部模型。
+v2 增量先观察旧 schema 拒绝新请求，再观察旧输入模型错误接受缺失参考/基础 Hash、不同会话版本、额外自由文本和概率对象；实现后全部通过。第三个合成测试在真实 Bub/Republic + MockTransport 边界验证有/无参考均可总结、全部会话字段及独立参考完整传递、无工具，以及把参考 run_id 当 message_ids 会失败。结构验证和固定 Mock 输出不能证明真实模型文字正确，未因此增加真实模型调用。
 简化实验：移除仅转发超时调用的包装函数，直接使用 `asyncio.wait_for`，合成测试和 SDK Mock 流验证通过。当前保留 Pydantic 模型是为了共享严格字段与引用约束。
+v2 设计简化检查：继续复用已有消息引用校验和单份 input 序列化，只增加参考结构和版本校验；不建立另一套证据集合、摘要输入转换层或 SDK 包装器。本次为设计检查，没有宣称新的实际消融实验。
 
 ## 直接文件索引
 
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 协议、运行、版本与能力边界 |
-| main.py | 固定入口 | stdin、SDK、总结与引用校验及安全诊断 |
-| test_main.py | 合成契约验证 | 状态、引用、安全诊断与失败模型追溯 |
+| main.py | 固定入口 | 完整会话与可选参考、SDK、消息引用校验及安全诊断 |
+| test_main.py | 合成契约验证 | 会话完整性、参考隔离、状态、安全诊断与失败模型追溯 |
 | pyproject.toml | 依赖声明 | 稳定版本和 Python 兼容范围 |
 | uv.lock | 自动生成锁文件 | 固定全部解析依赖及校验信息 |
 | .venv/ | 忽略的安装产物 | 本机 Python 解释器与依赖 |

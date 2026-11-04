@@ -1,4 +1,4 @@
-// input: 共享脱敏 JSON、显式模型配置及固定 Python 环境。
+// input: 完整脱敏会话及可选 Jev 模型参考、显式配置和固定 Python 环境。
 // output: 经结构与消息引用校验的 Bub 总结 JSON 和实际模型标识。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
@@ -16,7 +16,7 @@ import (
 	"zoho-workstation/internal/config"
 )
 
-const BubSchema = "bub-summary-v1"
+const BubSchema = "bub-summary-v2"
 
 type fact struct {
 	Text       string   `json:"text"`
@@ -157,7 +157,7 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 		diagnostic := ""
 		if len(envelope.Diagnostics) > 0 {
 			switch code := envelope.Diagnostics[0].Code; code {
-			case "unknown_reference", "missing_reference", "reported_result_without_execution", "missing_customer_evidence", "missing_next_step", "output_truncated", "blank_output", "unexpected_completion_count", "incomplete_generation", "schema_validation", "empty_conversation_not_unknown", "empty_conversation_has_claims":
+			case "unknown_reference", "missing_reference", "reference_version_mismatch", "reported_result_without_execution", "missing_customer_evidence", "missing_next_step", "output_truncated", "blank_output", "unexpected_completion_count", "incomplete_generation", "schema_validation", "empty_conversation_not_unknown", "empty_conversation_has_claims":
 				diagnostic = " (" + code + ")"
 			}
 		}

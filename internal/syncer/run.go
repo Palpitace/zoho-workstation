@@ -1,5 +1,5 @@
 // input: 只读 Zoho 客户端、SQLite 存储、采样限制和回查窗口。
-// output: 冻结样本的规范化持久化结果及跨分批恢复、完整成功后提交的固定水位。
+// output: 冻结样本的公平分批持久化结果及跨重启恢复、完整成功后提交的固定水位。
 // pos: 拉取、清洗与保存的同步编排边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer
 
@@ -85,11 +85,13 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 		return result, err
 	}
 	checked := make(map[string]bool, len(records))
-	needsWork := make(map[string]bool, len(records))
+	attemptedAt := make(map[string]time.Time, len(records))
 	for _, record := range records {
-		needsWork[record.ID] = record.Pending || record.SyncError != "" || !record.Complete
 		checkedAt, err := time.Parse(time.RFC3339Nano, record.CheckedAt)
-		checked[record.ID] = !needsWork[record.ID] && err == nil && !checkedAt.Before(until)
+		if err == nil {
+			attemptedAt[record.ID] = checkedAt
+		}
+		checked[record.ID] = !record.Pending && record.SyncError == "" && record.Complete && err == nil && !checkedAt.Before(until)
 	}
 	pending := ids[:0]
 	for _, id := range ids {
@@ -98,9 +100,9 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 		}
 	}
 	ids = pending
-	if state.Watermark == "" || state.Failed > 0 || state.Ready < state.Selected {
-		sort.SliceStable(ids, func(i, j int) bool { return needsWork[ids[i]] && !needsWork[ids[j]] })
-	}
+	// Failed attempts remain eligible, but move behind tickets tried less recently.
+	// Persisted attempt times preserve this ordering across process restarts.
+	sort.SliceStable(ids, func(i, j int) bool { return attemptedAt[ids[i]].Before(attemptedAt[ids[j]]) })
 	result.Remaining = len(ids)
 	for _, id := range ids {
 		if opts.MaxTickets > 0 && result.Fetched+result.Failed >= opts.MaxTickets {

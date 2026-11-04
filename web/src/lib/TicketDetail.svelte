@@ -1,18 +1,19 @@
-<!-- input: Go 工单快照、同步元数据、独立 Jev/Bub 结果及加载错误。 -->
-<!-- output: 工单字段、顺序会话、评估总结及消息引用定位。 -->
+<!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
+<!-- output: 工单会话、评估总结、事实引用和受控重新处理入口。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
-  import { dateTime, syncLabel, type TicketRecord, type JevView, type BubView } from "./api";
+  import { dateTime, syncLabel, type TicketRecord, type JevView, type BubView, type AIKind, type ActionFeedback } from "./api";
   import JevAssessment from "./JevAssessment.svelte";
   import BubSummary from "./BubSummary.svelte";
 
-  let { ticket, loading, error, jev, bub, analysisLoading, analysisError }: {
+  let { ticket, loading, error, jev, bub, analysisLoading, analysisError, controls, onRerun }: {
     ticket: TicketRecord | null; loading: boolean; error: string;
     jev: JevView | null; bub: BubView | null; analysisLoading: boolean; analysisError: string;
+    controls: Record<AIKind, ActionFeedback>; onRerun: (kind: AIKind) => void;
   } = $props();
   const roles: Record<string, string> = { customer: "客户", agent: "客服", unknown: "作者未知" };
   const visibility: Record<string, string> = { public: "公开", private: "内部", unknown: "可见性未知" };
@@ -103,7 +104,8 @@
         {:else}<p class="p-6 text-sm text-muted-foreground">尚无已保存的沟通记录。</p>{/each}
       </div>
     </section>
-    <JevAssessment view={jev} loading={analysisLoading} error={analysisError} />
-    <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} />
+    {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">此工单未纳入自动分析样本，可在剩余研发预算内手动评估或总结。</p>{/if}
+    <JevAssessment view={jev} loading={analysisLoading} error={analysisError} control={controls.jev} onRerun={() => onRerun("jev")} />
+    <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />
   {/if}
 </section>

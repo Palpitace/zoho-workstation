@@ -1,24 +1,24 @@
 // input: 已保存工单、根配置和研发轮次/数量限制。
-// output: 本地脱敏开发副本、独立 Jev/Bub 结果及不含原文的调用统计。
+// output: 脱敏开发副本、带同版本 Jev 参考的 Bub 输入及可追溯结果。
 // pos: 分析命令编排与本地验证入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
-package main
+package app
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 	"zoho-workstation/internal/analysis"
 	"zoho-workstation/internal/config"
 	"zoho-workstation/internal/store"
 )
 
-const developmentRound = "development-1"
+const DevelopmentRound = "development-1"
 
 type reviewItem struct {
 	TicketID string `json:"ticket_id"`
@@ -32,15 +32,48 @@ func analysisRequest(ctx context.Context, db *store.Store, cfg config.Config, id
 	if err != nil {
 		return store.AnalysisRequest{}, nil, err
 	}
+	return requestForRecord(ctx, db, cfg, snapshot, kind, round)
+}
+
+func requestForRecord(ctx context.Context, db *store.Store, cfg config.Config, snapshot store.Record, kind, round string) (store.AnalysisRequest, json.RawMessage, error) {
+	if snapshot.Pending {
+		return store.AnalysisRequest{}, nil, sql.ErrNoRows
+	}
 	input, hash, err := analysis.Input(snapshot.Snapshot, snapshot.Raw)
 	model, schema := cfg.Jev.Name, analysis.JevSchema
 	if kind == "bub" {
 		model, schema = cfg.Bub.Name, analysis.BubSchema
+		if err == nil {
+			var reference *analysis.JevReference
+			if cfg.Jev.Enabled {
+				view, e := db.Analysis(ctx, store.AnalysisRequest{TicketID: snapshot.ID, Kind: "jev", InputHash: hash, SchemaVersion: analysis.JevSchema, RequestedModel: cfg.Jev.Name})
+				if e != nil {
+					return store.AnalysisRequest{}, nil, e
+				}
+				if view.Success != nil && !view.Stale {
+					run := view.Success
+					var result struct {
+						Answers map[string]struct {
+							Choice string `json:"choice"`
+						} `json:"answers"`
+					}
+					if json.Unmarshal(run.Result, &result) != nil {
+						return store.AnalysisRequest{}, nil, errors.New("saved Jev assessment is invalid")
+					}
+					choices := map[string]string{}
+					for key, answer := range result.Answers {
+						choices[key] = answer.Choice
+					}
+					reference = &analysis.JevReference{Kind: "model_assessment", RunID: run.ID, ConversationHash: hash, SchemaVersion: run.SchemaVersion, RequestedModel: run.RequestedModel, ReturnedModel: run.ReturnedModel, Choices: choices}
+				}
+			}
+			input, hash, err = analysis.BubInput(input, hash, reference)
+		}
 	}
-	return store.AnalysisRequest{TicketID: id, Kind: kind, InputHash: hash, SchemaVersion: schema, RequestedModel: model, Round: round}, input, err
+	return store.AnalysisRequest{TicketID: snapshot.ID, Kind: kind, InputHash: hash, SchemaVersion: schema, RequestedModel: model, Round: round}, input, err
 }
 
-func prepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limit int) error {
+func PrepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limit int) error {
 	records, err := db.List(ctx, "", "")
 	if err != nil {
 		return err
@@ -60,7 +93,9 @@ func prepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limi
 		for _, record := range records {
 			byID[record.ID] = record
 		}
-		records = nil
+		if len(fixed) > 0 {
+			records = nil
+		}
 		for _, selected := range fixed {
 			record, ok := byID[selected.TicketID]
 			if !ok || record.Pending {
@@ -68,7 +103,9 @@ func prepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limi
 			}
 			records = append(records, record)
 		}
-		limit = len(records)
+		if len(fixed) > 0 {
+			limit = len(records)
+		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
@@ -81,12 +118,12 @@ func prepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limi
 		if len(manifest) >= limit {
 			break
 		}
-		request, input, e := analysisRequest(ctx, db, cfg, record.ID, "jev", developmentRound)
+		request, input, e := analysisRequest(ctx, db, cfg, record.ID, "jev", DevelopmentRound)
 		if e != nil {
 			return e
 		}
 		path := filepath.Join(dir, request.InputHash+".json")
-		if e = os.WriteFile(path, input, 0600); e != nil {
+		if e = saveInput(request.InputHash, input); e != nil {
 			return e
 		}
 		manifest = append(manifest, reviewItem{record.ID, request.InputHash, path, "development"})
@@ -112,14 +149,14 @@ func prepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limi
 	if err != nil {
 		return err
 	}
-	if err = os.WriteFile(manifestPath, body, 0600); err != nil {
+	if err = writePrivateFile(manifestPath, body); err != nil {
 		return err
 	}
 	slog.Info("redacted inputs prepared", "count", len(manifest), "incomplete", incomplete, "message_roles", roles, "attachments", attachments)
 	return nil
 }
 
-func analyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, limit int, kind, round string, force bool) error {
+func AnalyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, limit int, kind, round string, force bool) error {
 	if kind != "jev" && kind != "bub" {
 		return errors.New("analysis kind must be jev or bub")
 	}
@@ -135,7 +172,7 @@ func analyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, lim
 			return errors.New("Bub Python environment is not installed")
 		}
 	}
-	release, err := lockAnalysis(cfg.DatabasePath)
+	release, err := db.Lock("analysis")
 	if err != nil {
 		return err
 	}
@@ -163,11 +200,22 @@ func analyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, lim
 		if err != nil {
 			return err
 		}
-		if req.InputHash != selected.Hash {
+		conversationHash := req.InputHash
+		if kind == "bub" {
+			var source struct {
+				ConversationHash string `json:"conversation_hash"`
+			}
+			json.Unmarshal(input, &source)
+			conversationHash = source.ConversationHash
+		}
+		if conversationHash != selected.Hash {
 			return errors.New("review input changed; prepare the local review copy again")
 		}
 		if kind == "jev" && len(input) > 24*1024 {
 			return errors.New("Jev input exceeds conservative 24 KiB limit; no request sent")
+		}
+		if err := saveInput(req.InputHash, input); err != nil {
+			return err
 		}
 		run, start, err := db.StartAnalysis(ctx, req, force)
 		if err != nil {
@@ -210,22 +258,4 @@ func analyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, lim
 		return fmt.Errorf("analysis failed for %d ticket(s)", failed)
 	}
 	return nil
-}
-
-// The current local deployment targets Linux. Flock is released by the kernel
-// even after a crash, so a second command cannot "recover" an active request.
-func lockAnalysis(databasePath string) (func(), error) {
-	canonical, err := filepath.EvalSymlinks(databasePath)
-	if err != nil {
-		return nil, errors.New("analysis database path unavailable")
-	}
-	lock, err := os.OpenFile(canonical+".analysis.lock", os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, errors.New("analysis lock unavailable")
-	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
-		return nil, errors.New("analysis is already running for this database")
-	}
-	return func() { syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); lock.Close() }, nil
 }
