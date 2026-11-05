@@ -1,5 +1,5 @@
 # input: 合成会话、模型结果、SDK 模拟错误及隔离代理/缺依赖环境。
-# output: 引用失败栏目/条目位置； 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断的证据。
+# output: 可选设备信息省略后其余总结保留、引用失败栏目/条目位置； 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断的证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -22,6 +22,28 @@ from main import Snapshot, validate_summary, validation_diagnostics
 
 
 class SummaryContractTest(unittest.TestCase):
+    def test_optional_device_evidence_does_not_block_summary(self):
+        snapshot = Snapshot.model_validate({"conversation_hash": "synthetic", "product": "P1", "messages": [
+            {"id": "m1", "role": "customer", "body": "Labels overlap"},
+            {"id": "m2", "role": "agent", "body": "Please calibrate", "visibility": "public"},
+        ]})
+        base = {"customer_feedback": [{"text": "Labels overlap", "message_ids": ["m1"]}],
+                "support_responses": [{"text": "Support suggested calibration", "message_ids": ["m2"]}]}
+        for devices in (None, [], [{"text": "No device provided", "message_ids": []}],
+                        [{"text": "Unverified printer", "message_ids": ["unknown"]}]):
+            with self.subTest(devices=devices):
+                value = copy.deepcopy(base)
+                if devices is not None:
+                    value["device_info"] = devices
+                result = validate_summary(json.dumps(value), snapshot).model_dump()
+                self.assertEqual(result, {"device_info": [], **base})
+        value = {"device_info": [{"text": "P1", "message_ids": []},
+                                 {"text": "Unsupported", "message_ids": []}], **base}
+        self.assertEqual(len(validate_summary(json.dumps(value), snapshot).device_info), 1)
+        value["customer_feedback"][0]["message_ids"] = []
+        with self.assertRaises(ValidationError):
+            validate_summary(json.dumps(value), snapshot)
+
     def test_proxy_transports_construct_without_network(self):
         async def construct():
             async with httpx2.AsyncClient(timeout=3):
@@ -177,9 +199,8 @@ class SummaryContractTest(unittest.TestCase):
             fragmented[section] *= 2
             with self.subTest(fragmented=section), self.assertRaises(ValidationError):
                 validate_summary(json.dumps(fragmented), snapshot)
-        invalid = {**empty, "device_info": [{"text": "invented printer", "message_ids": []}]}
-        with self.assertRaises(ValidationError):
-            validate_summary(json.dumps(invalid), snapshot)
+        unsupported = {**empty, "device_info": [{"text": "invented printer", "message_ids": []}]}
+        self.assertEqual(validate_summary(json.dumps(unsupported), snapshot).model_dump(), empty)
         invalid = {**summary, "synthetic-private-field": "synthetic-private-content"}
         with self.assertRaises(ValidationError) as caught:
             validate_summary(json.dumps(invalid), snapshot)
@@ -266,6 +287,7 @@ class SummaryContractTest(unittest.TestCase):
             for name, cited_id in (("valid evidence", "m2"), ("unknown evidence", "42")):
                 sent = []
                 output = copy.deepcopy(summary)
+                output["device_info"] = [{"text": "Device unspecified", "message_ids": []}]
                 output["customer_feedback"][0]["message_ids"] = [cited_id, "m4"]
 
                 def respond(request):
