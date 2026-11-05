@@ -1,11 +1,12 @@
 // input: 根目录 .env 配置，不读取或覆盖进程环境。
-// output: 经校验的服务配置；错误仅包含字段名。
+// output: 经校验的服务和监听 IP 配置；错误仅包含字段名。
 // pos: 配置加载边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package config
 
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -24,10 +25,10 @@ type Model struct {
 }
 
 type Config struct {
-	Environment, Port, LogLevel, DatabasePath string
-	Zoho                                      Zoho
-	Jev, Bub                                  Model
-	SyncInterval, SyncLookback                time.Duration
+	Environment, ListenHost, Port, LogLevel, DatabasePath string
+	Zoho                                                  Zoho
+	Jev, Bub                                              Model
+	SyncInterval, SyncLookback                            time.Duration
 }
 
 // Load reads only the specified file so subprocesses never need inherited secrets.
@@ -44,6 +45,10 @@ func Load(path string) (Config, error) {
 		return fallback
 	}
 	c.Environment = value("APP_ENV", "development")
+	c.ListenHost = value("APP_LISTEN_HOST", "127.0.0.1")
+	if net.ParseIP(c.ListenHost) == nil {
+		return c, errors.New("invalid APP_LISTEN_HOST: IP address required")
+	}
 	c.Port = value("APP_PORT", "8080")
 	c.LogLevel = value("APP_LOG_LEVEL", "info")
 	c.DatabasePath = value("DATABASE_PATH", "./data/app.db")

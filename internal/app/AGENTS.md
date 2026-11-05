@@ -22,7 +22,7 @@ CLI、自动调用及 HTTP 状态共用 requestForRecord，避免调用和过期
 
 开发自动分析仅 manifest 中 development ID，首次至少保存 20 张时自动建立 17/3 开发与留出集合；已有集合不扩展。所有 50 张以内的工单仍展示，可在预算内手动分析。调用输入按 Hash 在 data/review 私有保存；本地输入校验失败记录 invalid、不占请求额度。Python 环境缺失返回 503 并显示运行错误，不将输入永久标为 invalid；环境修复后可自动恢复。额度耗尽继续同步/展示，不自动换轮次。
 
-服务监听 loopback；API 校验 Host，POST 还需 GET /api/status 提供的临时 X-CSRF-Token 及允许的 Origin。开发 Vite 仅允许 localhost/127.0.0.1 的 5173 端口。无远程访问或生产部署授权。GET 状态返回进度/预算/能力数量；POST /api/sync 与 /api/tickets/:id/analysis/:kind 返回已受理，不宣称已完成。
+服务默认监听 loopback，容器转发时入口可按 APP_LISTEN_HOST 监听容器接口；API 仍校验本机 Host，POST 还需 GET /api/status 提供的临时 X-CSRF-Token 及允许的 Origin。Windows 经宿主回环转发访问 localhost:8080，不开放任意 IP/域名的 Host 或 Origin。开发 Vite 仅允许 localhost/127.0.0.1 的 5173 端口。无公网或生产部署授权。GET 状态返回进度/预算/能力数量；POST /api/sync 与 /api/tickets/:id/analysis/:kind 返回已受理，不宣称已完成。
 
 自动开发分析复用 data/review/manifest.json 的 development ID，排除 holdout；固定采样仍由 store 限制最多 50。CLI PrepareInputs/AnalyzeTickets 与服务共用输入和结果协议。网络尝试前持久占预算；模型关闭不要求其配置。
 CLI prepare 同样持有 analysis 锁，服务内部初始化已持锁且加进程内互斥；manifest/新模型输入通过 0600 临时文件与原子 rename 发布，进程中断不会截断已有清单。

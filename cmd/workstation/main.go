@@ -1,5 +1,5 @@
 // input: 根 .env、命令行采样数量及本地 SQLite 数据。
-// output: 受控开发命令、本机静态页面与独立自动同步/分析服务。
+// output: 受控开发命令、显式 IP 监听的静态页面与自动同步/分析服务。
 // pos: Go 服务启动与生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package main
 
@@ -98,7 +98,8 @@ func run() error {
 		slog.Info("sample run finished", "fetched", result.Fetched, "failed", result.Failed, "remaining", result.Remaining)
 		return err
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", cfg.Port))
+	address := net.JoinHostPort(cfg.ListenHost, cfg.Port)
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
 	}
@@ -111,14 +112,14 @@ func run() error {
 		return err
 	}
 	defer service.Close()
-	server := &http.Server{Addr: "127.0.0.1:" + cfg.Port, Handler: service.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: address, Handler: service.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(shutdown)
 	}()
-	slog.Info("workstation ready", "address", fmt.Sprintf("http://127.0.0.1:%s", cfg.Port))
+	slog.Info("workstation ready", "listen", address, "local_url", fmt.Sprintf("http://127.0.0.1:%s", cfg.Port))
 	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

@@ -41,6 +41,20 @@ Bub/Republic 使用当前稳定 0.6.1 的 Core SDK 发布源码核实，Python >
 
 ## 运行边界
 
-Go 服务在本机 127.0.0.1 提供查询、受保护的同步/重跑入口和自动周期。POST 需同源临时令牌及允许的 Origin，Host 限本机；开发 Vite 代理重写 Host 并保留 Origin。同库同步/分析互斥使用当前 Linux 环境的 flock，移植到其他系统前须验证该边界。未来向其他机器开放时需明确管理接口访问控制，生产部署另行授权。
+Go 默认监听 127.0.0.1，容器可通过 APP_LISTEN_HOST 显式监听 0.0.0.0，提供查询、受保护的同步/重跑入口和自动周期。POST 需同源临时令牌及允许的 Origin，Host 限本机；开发 Vite 代理重写 Host 并保留 Origin。同库同步/分析互斥使用当前 Linux 环境的 flock，移植到其他系统前须验证该边界。未来向其他机器开放时需明确管理接口访问控制，生产部署另行授权。
 真实工单、原始响应、脱敏副本、AI 输出只留本地 data/，不提交 Git。自动脱敏有已知限制，详见 internal/ticket/AGENTS.md。
 企业微信通知暂缓；将来只在单独授权后接入，不提前增加模块或表。
+
+## 同机 Windows → WSL → wslc 容器
+
+用户使用 Paseo 连接 WSL2 内的 wslc 容器。容器本地 localhost 通并不能证明 Windows 已通。当前 .env 已追加 APP_LISTEN_HOST=0.0.0.0，原有值保留；应用接受转发后的 localhost:8080 Host，直接用容器 IP 作 URL 仍返回 403。
+
+在 **Windows PowerShell** 中检查宿主端口映射（不要直接执行 Windows 未安装的 docker）：
+
+```powershell
+wsl.exe -- docker port wslc 8080/tcp
+```
+
+若 Docker 所在 WSL 不是默认发行版，先用 `wsl.exe --list --verbose` 查看，再用 `wsl.exe -d <发行版名称> -- docker port wslc 8080/tcp`。目标是宿主回环 127.0.0.1:8080 转发到容器 8080，然后在 Windows 打开 http://localhost:8080。现有容器映射需在宿主确认；不能为了添加映射直接删除/重建含用户数据的容器。
+
+依据：[Microsoft WSL 网络说明](https://learn.microsoft.com/en-us/windows/wsl/networking)、[Docker 端口发布说明](https://docs.docker.com/engine/network/port-publishing/)。Paseo 的客户端连接本身不证明项目 8080 已发布；其连接机制见 [Paseo connectivity](https://paseo.sh/docs/connectivity)。Windows 端实测尚待宿主映射确认，不将容器内验证标成 Windows 已可访问。
