@@ -1,6 +1,6 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 独立分析记录、本地校验失败、成功结果保留和跨重启研发调用预算。
-// pos: SQLite AI 结果与调用额度边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
+// output: 独立分析记录、本地校验失败、成功结果保留和跨重启调用计数（不限制累计次数）。
+// pos: SQLite AI 结果与调用计数边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
 import (
@@ -9,8 +9,6 @@ import (
 	"errors"
 	"time"
 )
-
-var ErrAnalysisBudget = errors.New("development model request budget exhausted")
 
 type AnalysisRequest struct {
 	TicketID       string `json:"ticket_id"`
@@ -65,8 +63,8 @@ func (s *Store) RecordAnalysisFailure(ctx context.Context, req AnalysisRequest, 
 	return err
 }
 
-// StartAnalysis reserves the attempt before network access. Interrupted attempts
-// remain charged, since a remote service may already have processed them.
+// StartAnalysis records attempts before network access without a cumulative quota.
+// Interrupted attempts remain counted; per-input dedup and retry guards still apply.
 func (s *Store) StartAnalysis(ctx context.Context, req AnalysisRequest, force bool) (AnalysisRun, bool, error) {
 	run := AnalysisRun{AnalysisRequest: req, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if (req.Kind != "jev" && req.Kind != "bub") || req.InputHash == "" || req.SchemaVersion == "" || req.RequestedModel == "" || req.Round == "" {
@@ -84,13 +82,6 @@ func (s *Store) StartAnalysis(ctx context.Context, req AnalysisRequest, force bo
 	}
 	if running > 0 || (!force && (success > 0 || failures >= 2 || invalid > 0)) {
 		return run, false, nil
-	}
-	var total, round int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(round=?),0) FROM ai_runs WHERE status!='invalid'", req.Round).Scan(&total, &round); err != nil {
-		return run, false, err
-	}
-	if total >= 60 || round >= 20 {
-		return run, false, ErrAnalysisBudget
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO ai_runs(ticket_id,kind,input_hash,schema_version,requested_model,round,status,started_at) VALUES(?,?,?,?,?,?,'running',?)`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel, req.Round, run.StartedAt)
 	if err != nil {

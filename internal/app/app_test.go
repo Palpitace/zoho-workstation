@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成 Zoho/Jev HTTP 服务及本机 API 请求。
-// output: 自动失败恢复、独立查看、管理防护及跨重启缓存/预算的行为证据。
+// output: 自动失败恢复、独立查看、管理防护及跨重启缓存/计数及超旧额度继续处理的行为证据。
 // pos: 单服务生命周期集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -78,6 +78,16 @@ func TestAutomaticAnalysisRecoveryAndProtectedOperations(t *testing.T) {
 	if err = db.Save(ctx, ticket.RawSnapshot{Ticket: json.RawMessage(`{"id":"1"}`)}, snapshot); err != nil {
 		t.Fatal(err)
 	}
+	// Existing history beyond both retired limits must not block new work.
+	for i := 0; i < 61; i++ {
+		run, started, e := db.StartAnalysis(ctx, store.AnalysisRequest{TicketID: "1", Kind: "jev", InputHash: "historical", SchemaVersion: "v1", RequestedModel: "synthetic", Round: app.DevelopmentRound}, true)
+		if e != nil || !started {
+			t.Fatalf("seed historical requests: %v", e)
+		}
+		if e = db.FinishAnalysis(ctx, run.ID, "synthetic", json.RawMessage(`{}`), nil); e != nil {
+			t.Fatal(e)
+		}
+	}
 	os.MkdirAll("data/review", 0700)
 	os.WriteFile("data/review/manifest.json", []byte(`[{"ticket_id":"1","split":"development"}]`), 0600)
 	cfg := config.Config{Environment: "development", Port: "8080", DatabasePath: dbPath, SyncInterval: 30 * time.Millisecond, SyncLookback: time.Hour, Zoho: config.Zoho{BaseURL: external.URL, AccountsURL: external.URL, DepartmentID: "7"}, Jev: config.Model{Enabled: true, Name: "synthetic", Key: "synthetic", URL: external.URL + "/jev"}}
@@ -115,8 +125,23 @@ func TestAutomaticAnalysisRecoveryAndProtectedOperations(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if status.AI["jev"].Success != 1 || models.Load() != 2 || syncs.Load() == 0 || status.Budget.Total != 2 {
+	if status.AI["jev"].Success != 1 || models.Load() != 2 || syncs.Load() == 0 || status.Budget.Total != 63 {
 		t.Fatalf("automatic recovery: requests=%d sync=%d budget=%d", models.Load(), syncs.Load(), status.Budget.Total)
+	}
+	var pending struct {
+		AI map[string]struct {
+			Status string `json:"status"`
+		} `json:"ai"`
+	}
+	if e := json.Unmarshal(call("GET", "/api/tickets/2", "", "").Body.Bytes(), &pending); e != nil || pending.AI["jev"].Status != "pending" {
+		t.Fatal("old quota still masks pending analysis")
+	}
+	var statusJSON map[string]json.RawMessage
+	json.Unmarshal(call("GET", "/api/status", "", "").Body.Bytes(), &statusJSON)
+	var counts map[string]int
+	json.Unmarshal(statusJSON["budget"], &counts)
+	if _, ok := counts["total_limit"]; ok {
+		t.Fatal("status still advertises removed quota")
 	}
 	if r := call("POST", "/api/sync", "", ""); r.Code != 403 {
 		t.Fatal("missing token accepted")

@@ -1,5 +1,5 @@
-<!-- input: Go 同步进度、自动运行状态、独立 AI 数量及研发调用预算。 -->
-<!-- output: 当前部门、任务进度、失败状态和预算余量概览。 -->
+<!-- input: Go 同步进度、自动运行状态、独立 AI 数量及模型调用统计。 -->
+<!-- output: 当前部门、任务进度、失败状态和累计调用次数及不限额状态概览。 -->
 <!-- pos: 运行状态页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -33,13 +33,12 @@
     {/if}
     {#if status.budget}
       <section class="space-y-4 rounded-lg border p-5 sm:p-6" aria-labelledby="budget-title">
-        <h2 id="budget-title" class="font-semibold">研发调用预算</h2>
+        <h2 id="budget-title" class="font-semibold">模型调用统计</h2>
         <dl class="grid gap-4 text-sm sm:grid-cols-2">
-          <div><dt class="text-muted-foreground">整个 Goal 已使用</dt><dd class="mt-1 tabular-nums">{status.budget.total} / {status.budget.total_limit} 次</dd></div>
-          <div><dt class="text-muted-foreground">当前轮次已使用</dt><dd class="mt-1 tabular-nums">{status.budget.round} / {status.budget.round_limit} 次</dd></div>
+          <div><dt class="text-muted-foreground">累计请求</dt><dd class="mt-1 tabular-nums">{status.budget.total} 次</dd></div>
+          <div><dt class="text-muted-foreground">当前轮次请求</dt><dd class="mt-1 tabular-nums">{status.budget.round} 次</dd></div>
         </dl>
-        {#if status.budget.total >= status.budget.total_limit || status.budget.round >= status.budget.round_limit}<p role="status" class="text-sm">研发预算已耗尽，模型操作暂停，工单同步与查看继续可用。</p>{/if}
-        <p class="text-xs text-muted-foreground">失败请求与重试均计入预算，刷新页面或重启服务不会清零。</p>
+        <p class="text-xs text-muted-foreground">请求额度限制已关闭。失败请求与重试仍计入统计，刷新页面或重启服务不会清零。</p>
       </section>
     {/if}
     <section aria-labelledby="capabilities-title">

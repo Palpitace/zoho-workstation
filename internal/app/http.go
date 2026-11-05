@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 工单详情、按实际会话/参考版本计算的分析状态及受保护操作。
+// output: 工单详情、按实际会话/参考版本计算的分析状态、请求计数及受保护操作（无累计额度门槛）。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -49,7 +49,7 @@ func (a *App) eligibleID(id string) bool {
 	return false
 }
 
-func (a *App) recordViews(ctx context.Context, record store.Record, budget store.Budget) (map[string]AIStatus, map[string]store.AnalysisView, error) {
+func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]AIStatus, map[string]store.AnalysisView, error) {
 	summaries := map[string]AIStatus{}
 	views := map[string]store.AnalysisView{}
 	for _, kind := range []string{"jev", "bub"} {
@@ -77,8 +77,6 @@ func (a *App) recordViews(ctx context.Context, record store.Record, budget store
 		}
 		if !model.Enabled {
 			s.Status = "disabled"
-		} else if s.Status == "pending" && (budget.Total >= 60 || budget.Round >= 20) {
-			s.Status = "budget_exhausted"
 		}
 		if kind == "jev" && view.Success != nil && !view.Stale {
 			var result struct {
@@ -123,11 +121,6 @@ func (a *App) Handler() http.Handler {
 	})
 	router.GET("/api/status", a.status)
 	router.GET("/api/tickets", func(c *gin.Context) {
-		budget, err := a.db.AnalysisBudget(c.Request.Context(), DevelopmentRound)
-		if err != nil {
-			apiError(c, 500, "cannot read budget")
-			return
-		}
 		records, err := a.db.List(c.Request.Context(), c.Query("q"), c.Query("status"))
 		if err != nil {
 			apiError(c, 500, "cannot read tickets")
@@ -142,7 +135,7 @@ func (a *App) Handler() http.Handler {
 					return
 				}
 			}
-			ai, _, e := a.recordViews(c.Request.Context(), record, budget)
+			ai, _, e := a.recordViews(c.Request.Context(), record)
 			if e != nil {
 				apiError(c, 500, "cannot read analysis state")
 				return
@@ -159,12 +152,7 @@ func (a *App) Handler() http.Handler {
 			apiError(c, 404, "ticket not available")
 			return
 		}
-		budget, err := a.db.AnalysisBudget(c.Request.Context(), DevelopmentRound)
-		if err != nil {
-			apiError(c, 500, "cannot read budget")
-			return
-		}
-		ai, _, err := a.recordViews(c.Request.Context(), record, budget)
+		ai, _, err := a.recordViews(c.Request.Context(), record)
 		if err != nil {
 			apiError(c, 500, "cannot read analysis state")
 			return
@@ -177,7 +165,7 @@ func (a *App) Handler() http.Handler {
 			apiError(c, 404, "ticket not available")
 			return
 		}
-		_, views, err := a.recordViews(c.Request.Context(), record, store.Budget{})
+		_, views, err := a.recordViews(c.Request.Context(), record)
 		if err != nil {
 			apiError(c, 500, "cannot read analysis")
 			return
@@ -221,7 +209,7 @@ func (a *App) status(c *gin.Context) {
 	}
 	budget, err := a.db.AnalysisBudget(ctx, DevelopmentRound)
 	if err != nil {
-		apiError(c, 500, "cannot read budget")
+		apiError(c, 500, "cannot read request counts")
 		return
 	}
 	records, err := a.db.List(ctx, "", "")
@@ -238,7 +226,7 @@ func (a *App) status(c *gin.Context) {
 				return
 			}
 		}
-		summaries, _, err := a.recordViews(ctx, record, budget)
+		summaries, _, err := a.recordViews(ctx, record)
 		if err != nil {
 			apiError(c, 500, "cannot read analysis status")
 			return
@@ -252,7 +240,7 @@ func (a *App) status(c *gin.Context) {
 				n.Failed++
 			case "running":
 				n.Running++
-			case "pending", "budget_exhausted":
+			case "pending":
 				n.Pending++
 			}
 			if s.Stale {
@@ -263,7 +251,7 @@ func (a *App) status(c *gin.Context) {
 	a.mu.Lock()
 	runtime := gin.H{"sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "development", "ai_scope_count": len(a.eligible), "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
 	a.mu.Unlock()
-	c.JSON(200, gin.H{"sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round, "total_limit": 60, "round_limit": 20}})
+	c.JSON(200, gin.H{"sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round}})
 }
 
 func apiError(c *gin.Context, status int, message string) { c.JSON(status, gin.H{"error": message}) }
@@ -273,8 +261,6 @@ func operationResponse(c *gin.Context, err error) {
 		c.JSON(202, gin.H{"status": "accepted"})
 	case errors.Is(err, store.ErrBusy):
 		apiError(c, 409, "operation already running")
-	case errors.Is(err, store.ErrAnalysisBudget):
-		apiError(c, 429, "development model request budget exhausted")
 	case errors.Is(err, errPythonUnavailable):
 		apiError(c, 503, "Bub Python environment is unavailable")
 	case errors.Is(err, sql.ErrNoRows):

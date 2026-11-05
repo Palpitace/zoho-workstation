@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成分析版本与供应商结果。
-// output: 旧输入隔离、重试保留首次终结状态、本地失败不计费及持久预算证据。
+// output: 旧输入隔离、重试保留首次终结状态、本地失败不计次及关闭额度后的持久计数证据。
 // pos: AI 结果存储边界集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store_test
 
@@ -14,7 +14,7 @@ import (
 	"zoho-workstation/internal/store"
 )
 
-func TestAnalysisVersionsFailuresAndPersistentBudget(t *testing.T) {
+func TestAnalysisVersionsFailuresAndUnlimitedRequestCounts(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "app.db")
 	db, err := store.Open(path, "7")
@@ -104,10 +104,10 @@ func TestAnalysisVersionsFailuresAndPersistentBudget(t *testing.T) {
 	if view.Current == nil || view.Current.Status != "failed" || !view.Stale {
 		t.Fatal("interrupted analysis not recovered")
 	}
-	for i := 4; i < 20; i++ {
+	for i := 4; i < 61; i++ {
 		run, ok, e := db.StartAnalysis(ctx, req, true)
 		if e != nil || !ok {
-			t.Fatalf("budget rejected request %d: %v", i+1, e)
+			t.Fatalf("request count incorrectly blocked request %d: %v", i+1, e)
 		}
 		view, e = db.Analysis(ctx, req)
 		if e != nil || view.Current.Status != "running" || !view.HasFinishedAttempt {
@@ -117,28 +117,33 @@ func TestAnalysisVersionsFailuresAndPersistentBudget(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if _, ok, e := db.StartAnalysis(ctx, req, true); !errors.Is(e, store.ErrAnalysisBudget) || ok {
-		t.Fatal("round budget bypassed")
+	if _, ok, e := db.StartAnalysis(ctx, req, false); e != nil || ok {
+		t.Fatal("removing quotas must not remove automatic failure retry limits")
 	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = store.Open(path, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 	budget, err = db.AnalysisBudget(ctx, "round1")
-	if err != nil || budget.Total != 20 || budget.Round != 20 {
-		t.Fatalf("persistent budget: %+v %v", budget, err)
+	if err != nil || budget.Total != 61 || budget.Round != 61 {
+		t.Fatalf("history counts changed after restart: %+v %v", budget, err)
 	}
-	for _, round := range []string{"round2", "round3"} {
-		req.Round = round
-		for i := 0; i < 20; i++ {
-			run, ok, e := db.StartAnalysis(ctx, req, true)
-			if e != nil || !ok {
-				t.Fatalf("later authorized round: %v", e)
-			}
-			if e = db.FinishAnalysis(ctx, run.ID, "", nil, errors.New("synthetic failure")); e != nil {
-				t.Fatal(e)
-			}
+	for _, kind := range []string{"jev", "bub"} {
+		req.Kind, req.InputHash = kind, "fresh-"+kind
+		run, ok, e := db.StartAnalysis(ctx, req, false)
+		if e != nil || !ok {
+			t.Fatalf("automatic %s blocked beyond old limits: %v", kind, e)
 		}
-	}
-	req.Round = "round4"
-	if _, ok, e := db.StartAnalysis(ctx, req, true); !errors.Is(e, store.ErrAnalysisBudget) || ok {
-		t.Fatal("total budget bypassed by new round")
+		if _, ok, e := db.StartAnalysis(ctx, req, true); e != nil || ok {
+			t.Fatal("overlapping input admitted")
+		}
+		if e = db.FinishAnalysis(ctx, run.ID, "synthetic", json.RawMessage(`{}`), nil); e != nil {
+			t.Fatal(e)
+		}
 	}
 }
 

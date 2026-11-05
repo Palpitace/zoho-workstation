@@ -8,4 +8,4 @@
 | --- | --- | --- |
 | AGENTS.md | 文档索引 | 来源及边界 |
 | zoho-oas | 第三方 Submodule | Zoho 官方 OAS，豁免自有文件头和目录文档 |
-| compatibility.md | 实现依据 | 固定版本、Skills、API/代理/同步兼容性及 Windows/WSL/容器访问 |
+| compatibility.md | 实现依据 | 固定版本、Skills、API/代理/同步及请求计数兼容性及 Windows/WSL/容器访问 |

@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 可取消的短间隔分批同步/退避及独立 Jev/Bub 分析调度。
+// output: 可取消的短间隔分批同步/退避及独立 Jev/Bub 分析调度，不按累计次数拦截。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -253,7 +253,7 @@ func (a *App) scheduleAnalysis() {
 			}
 			if err != nil {
 				a.setError(kind, err)
-				if errors.Is(err, store.ErrAnalysisBudget) || errors.Is(err, errPythonUnavailable) {
+				if errors.Is(err, errPythonUnavailable) {
 					break
 				}
 			}
@@ -286,8 +286,7 @@ func (a *App) awaitingJev(id string) (bool, error) {
 	if view.Current != nil {
 		return !view.HasFinishedAttempt, nil
 	}
-	budget, err := a.db.AnalysisBudget(a.ctx, DevelopmentRound)
-	return budget.Round < 20 && budget.Total < 60, err
+	return true, nil
 }
 
 func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {

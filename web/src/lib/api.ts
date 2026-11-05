@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单/分析及同步停止状态类型、可取消查询和受保护操作。
+// output: 工单/分析及同步停止/调用计数状态类型、可取消查询和受保护操作。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -49,7 +49,7 @@ export type TicketRecord = Ticket & {
 export type AIKind = "jev" | "bub";
 export type Operation = "sync" | AIKind;
 export type AIState = {
-  status: "pending" | "running" | "failed" | "success" | "disabled" | "budget_exhausted";
+  status: "pending" | "running" | "failed" | "success" | "disabled";
   stale: boolean;
   automatic_eligible?: boolean;
   priority?: string;
@@ -82,7 +82,7 @@ export type SystemStatus = {
     ai_scope_count?: number;
     last_error: Partial<Record<Operation, string>>;
   };
-  budget: { total: number; round: number; total_limit: number; round_limit: number };
+  budget: { total: number; round: number };
   ai: Record<AIKind, AICounts>;
 };
 
@@ -140,7 +140,7 @@ export async function postAction(path: string, token: string, signal: AbortSigna
 }
 
 export function aiLabel(value?: AIState): string {
-  const labels = { pending: "待处理", running: "处理中", failed: "失败", success: "已完成", disabled: "已关闭", budget_exhausted: "预算耗尽" };
+  const labels = { pending: "待处理", running: "处理中", failed: "失败", success: "已完成", disabled: "已关闭" };
   if (value?.status === "pending" && value.automatic_eligible === false) return "未纳入自动分析";
   return value ? labels[value.status] || "状态未知" : "未读取";
 }

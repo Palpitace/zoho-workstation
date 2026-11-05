@@ -1,5 +1,5 @@
 // input: 根 .env、命令行采样数量及本地 SQLite 数据。
-// output: 受控开发命令、显式 IP 监听的静态页面与自动同步/分析服务。
+// output: 受控开发命令（累计模型次数不限额）、显式 IP 监听及自动同步/分析服务。
 // pos: Go 服务启动与生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package main
 
@@ -52,8 +52,8 @@ func run() error {
 	maxTickets := flags.Int("max", defaultMax, "maximum tickets to process in this run")
 	round, force, kind := app.DevelopmentRound, false, "jev"
 	if command == "analyze" {
-		flags.StringVar(&round, "round", app.DevelopmentRound, "persistent development round, at most 20 model requests")
-		flags.BoolVar(&force, "force", false, "rerun within model request budget")
+		flags.StringVar(&round, "round", app.DevelopmentRound, "persistent label for model request counts; no cumulative quota")
+		flags.BoolVar(&force, "force", false, "rerun a completed input; an active request remains protected")
 		flags.StringVar(&kind, "kind", "jev", "analysis capability: jev or bub")
 	}
 	if err := flags.Parse(args); err != nil {

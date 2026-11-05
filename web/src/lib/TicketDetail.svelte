@@ -1,5 +1,5 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 工单会话、部门移出停止原因、评估总结及事实引用。 -->
+<!-- output: 工单会话、部门移出停止原因、评估总结、无累计额度的重跑提示及事实引用。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
@@ -106,7 +106,7 @@
         {:else}<p class="p-6 text-sm text-muted-foreground">尚无已保存的沟通记录。</p>{/each}
       </div>
     </section>
-    {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">此工单未纳入自动分析样本，可在剩余研发预算内手动评估或总结。</p>{/if}
+    {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">此工单未纳入自动分析样本，可手动评估或总结。</p>{/if}
     <JevAssessment view={jev} loading={analysisLoading} error={analysisError} control={controls.jev} onRerun={() => onRerun("jev")} />
     <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />
   {/if}

@@ -1,5 +1,5 @@
 <!-- input: 浏览器导航、Go 查询/操作 API 及会话防护令牌。 -->
-<!-- output: 工单界面、受控人工操作及可见页面的轻量进度刷新。 -->
+<!-- output: 工单界面、受控人工操作（无累计额度拦截）及可见页面的轻量进度刷新。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onMount, untrack } from "svelte";
@@ -52,8 +52,6 @@
     if (!status[`${kind}_enabled`]) return "能力已关闭";
     if (!detail || detail.pending) return "工单尚未保存";
     if ((kind === "jev" ? jev : bub)?.current?.status === "running") return "任务进行中";
-    if (!status.budget) return "等待调用预算";
-    if (status.budget.total >= status.budget.total_limit || status.budget.round >= status.budget.round_limit || detail.ai?.[kind].status === "budget_exhausted") return "研发预算已耗尽";
     return "";
   }
   const controls = $derived({

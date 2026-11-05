@@ -10,7 +10,7 @@
 | analysis.go | 分析输入与开发入口 | 固定数据集、同版 Jev 参考、实际输入版本及有限分析命令 |
 | analysis_test.go | 恢复测试 | 互斥分析避免误恢复活动请求 |
 | app.go | 生命周期 | 短间隔批次/退避、常规轮询、分析及关闭 |
-| http.go | 同源 API | 工单/分析状态、预算及受保护操作 |
+| http.go | 同源 API | 工单/分析状态、调用计数及受保护操作 |
 | sync_test.go | 同步调度回归 | 首轮接续、失败/429 等待及关闭取消 |
 | app_test.go | 小型集成验证 | 自动失败重试、查询不阻塞、操作防护及重启 |
 | reference_test.go | 参考流程验证 | 完整会话、Jev 首次尝试等待及失败/过期参考隔离 |
@@ -21,9 +21,11 @@ Start 必须在 HTTP 监听成功后调用，先持有同库 sync/analysis 进�
 
 CLI、自动调用及 HTTP 状态共用 requestForRecord，避免调用和过期判断使用不同 Hash。Jev 使用完整会话 Hash；Bub v2 保留完整会话并添加 conversation_hash、可空 jev_reference，实际输入包含来源运行 ID/版本/模型和评估标签，按内容 Hash 私有保存。只附同版本的成功结果，未知/失败/过期结果不伪装成当前评估。
 
-开发自动分析仅 manifest 中 development ID，首次至少保存 20 张时自动建立 17/3 开发与留出集合；已有集合不扩展。所有 50 张以内的工单仍展示，可在预算内手动分析。调用输入按 Hash 在 data/review 私有保存；本地输入校验失败记录 invalid、不占请求额度。Python 环境缺失返回 503 并显示运行错误，不将输入永久标为 invalid；环境修复后可自动恢复。额度耗尽继续同步/展示，不自动换轮次。
+开发自动分析仅 manifest 中 development ID，首次至少保存 20 张时自动建立 17/3 开发与留出集合；已有集合不扩展。所有 50 张以内的工单仍展示，可手动分析。调用输入按 Hash 在 data/review 私有保存；本地输入校验失败记录 invalid、不计入请求次数。Python 环境缺失返回 503 并显示运行错误，不将输入永久标为 invalid；环境修复后可自动恢复。累计请求额度已关闭，自动任务不因历史调用数停止，不重置或自动切换统计轮次。
 
-服务默认监听 loopback，容器转发时入口可按 APP_LISTEN_HOST 监听容器接口；API 仍校验本机 Host，POST 还需 GET /api/status 提供的临时 X-CSRF-Token 及允许的 Origin。Windows 经宿主回环转发访问 localhost:8080，不开放任意 IP/域名的 Host 或 Origin。开发 Vite 仅允许 localhost/127.0.0.1 的 5173 端口。无公网或生产部署授权。GET 状态返回进度/预算/能力数量；POST /api/sync 与 /api/tickets/:id/analysis/:kind 返回已受理，不宣称已完成。
+服务默认监听 loopback，容器转发时入口可按 APP_LISTEN_HOST 监听容器接口；API 仍校验本机 Host，POST 还需 GET /api/status 提供的临时 X-CSRF-Token 及允许的 Origin。Windows 经宿主回环转发访问 localhost:8080，不开放任意 IP/域名的 Host 或 Origin。开发 Vite 仅允许 localhost/127.0.0.1 的 5173 端口。无公网或生产部署授权。GET 状态返回进度/调用计数/能力数量；POST /api/sync 与 /api/tickets/:id/analysis/:kind 返回已受理，不宣称已完成。
 
-自动开发分析复用 data/review/manifest.json 的 development ID，排除 holdout；固定采样仍由 store 限制最多 50。CLI PrepareInputs/AnalyzeTickets 与服务共用输入和结果协议。网络尝试前持久占预算；模型关闭不要求其配置。
+自动开发分析复用 data/review/manifest.json 的 development ID，排除 holdout；固定采样仍由 store 限制最多 50。CLI PrepareInputs/AnalyzeTickets 与服务共用输入和结果协议。网络尝试前持久记录次数；模型关闭不要求其配置。
 CLI prepare 同样持有 analysis 锁，服务内部初始化已持锁且加进程内互斥；manifest/新模型输入通过 0600 临时文件与原子 rename 发布，进程中断不会截断已有清单。
+
+GET /api/status 的 budget 保留 total/round 统计字段，移除 total_limit/round_limit；不再返回 budget_exhausted 或本地额度 HTTP 429。recordViews 不查询额度，Jev 首次尝试等待只根据已有运行状态判断。真实上游限流、模型开关、超时、有限重试和同输入互斥仍有效。
