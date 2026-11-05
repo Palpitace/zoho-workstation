@@ -6,7 +6,7 @@
 
 ## 协议和运行
 
-输入只有 `{input:<完整脱敏会话及可选参考>,config:{api_base,api_key,model},schema_version:"bub-summary-v2"}`。
+输入只有 `{input:<完整脱敏会话及可选参考>,config:{api_base,api_key,model},schema_version:"bub-summary-v3"}`。
 input 保持 messages、主题、描述等字段平面结构，必有 `conversation_hash`（附参考之前的会话版本）和 `jev_reference`；无可用评估时参考显式为 null，不阻止独立总结。
 非空参考只允许 `{kind:"model_assessment",run_id,conversation_hash,schema_version,requested_model,returned_model,choices:{字段:标签字符串}}`，不接收额外自由文本或概率字段。参考 Hash 必须与 input.conversation_hash 相同，不一致返回安全诊断 `reference_version_mismatch`；Go 负责筛选当前有效评估。
 完整会话与独立参考一同传入无工具 SDK，参考不变成消息或事实，不进入可引用消息 ID 集。Prompt 要求原文优先、缺少证据时承认未知，不能因 Jev 参考推定客户已执行或缺陷已确认，也不让 Bub 重新执行 Jev 评估。
@@ -16,8 +16,8 @@ input 保持 messages、主题、描述等字段平面结构，必有 `conversat
 stdout 只输出一份 JSON；stderr 仅输出不含正文和凭据的错误码。Go 必须使用固定解释器/入口、stdin 和外层进程超时，不拼接 Shell。
 Go 子进程允许继承 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 的大小写形式；本入口不读取其他父进程配置，也不记录代理值。锁定 Republic 的 APITimeoutError 对应 model_timeout，APIConnectionError 对应 model_connection_failed，APIStatusError/APIResponseError 对应 model_upstream_failed；其他 RepublicError 仍为 model_request_failed。HTTP 状态、响应正文、异常 cause/repr 和代理认证信息均不输出。SDK Mock 用连接异常、连接超时和 HTTP 503 覆盖分类及单次请求约束；真实子进程模拟代理检查位于 internal/analysis/bub_test.go。
 诊断最多 16 项，每项 loc 最多 8 层，只保留已知结构字段及有界索引；任意额外字段名统一为 `unknown_field`。
-type/code 都来自本地白名单，不输出 Pydantic input、msg、ctx、模型正文、HTTP 响应或异常 repr；可区分未知引用、缺少引用、执行/结果冲突、截断、空白和结构错误。
-过去只返回 `invalid_summary` 且原文已丢弃的请求不能追溯具体原因；新增诊断只用于后续获准请求，不自动重试或扩大预算。
+type/code 都来自本地白名单，不输出 Pydantic input、msg、ctx、模型正文、HTTP 响应或异常 repr；可区分未知引用、缺少引用、客户/客服来源不符、截断、空白和结构错误。
+过去只返回 `invalid_summary` 且原文已丢弃的请求不能追溯具体原因；新增诊断只用于后续获准请求，不隐式重试。
 
 从仓库根目录执行：
 
@@ -28,7 +28,7 @@ uv run --project python --no-sync python -m unittest discover -s python -p 'test
 ```
 
 入口等待 stdin JSON；不要把真实凭据写在命令行。真实运行需要 Go 服务和本目录随附 Python 环境。
-Python 本身设置 75 秒总超时，Republic HTTP 超时 60 秒。并发与研发调用预算由 Go 控制。
+Python 本身设置 75 秒总超时，Republic HTTP 超时 60 秒。并发、调用计数和有限失败重试由 Go 控制，累计请求额度已由用户关闭。
 
 ## SDK 与结果边界
 
@@ -43,24 +43,22 @@ Republic 的公开 middleware 读取 `Completed.response`，保留供应商实�
 [DeepSeek JSON 模式](https://api-docs.deepseek.com/guides/json_mode/)使用 `response_format.type=json_object`，只保证 JSON 格式，不保证字段或事实正确。
 Republic `output_schema` 在 Chat 格式下会生成 `json_schema`，当前 DeepSeek Chat 文档未声明支持，故本入口使用 JSON 模式及 Pydantic 本地校验。
 空白、截断、拒绝、工具输出、结构错误和不存在的引用均失败，不保存为成功总结；不因失败删除 Go 中的旧结果。
-固定结构区分建议、客户确认执行和客户报告结果；客户结果必须对应已确认执行。混合作者转录的真实归属仍由模型依据正文判断。
-本地验证只证明枚举、引用和部分角色约束，不证明模型没有事实错误。没有真实模型验证时不能声称真实接入已完成。
+v3 结果只有 device_info、customer_feedback、support_responses 三个必有数组，每类最多 10 项，统一 `{text,message_ids}`。无证据则数组为空，不强制“未知”等占位，不新增模型建议。设备信息、客户实际反馈、客服已回复/给予排查分别归类；Prompt 明确建议不能当已执行，客户确认及实际结果必须基于客户原话。
+客户反馈至少有 customer 或 mixed_authors 消息引用；客服回复至少有 agent 或 mixed_authors，且其引用不允许 private 或 DRAFT/FAILED/PENDING 消息。模型仍负责混合转录逐句归属，不根据外层角色猜测执行者。
+设备信息可引用消息；仅当 text 逐字等于 input.product 或为 input.description 的逐字片段时，允许 message_ids=[] 表示工单字段证据。Prompt 禁止设备推断、截断否定/条件或拼接改变含义；没有消息或明确设备字段时三个数组全空。
+本地验证只证明结构、引用、字面字段及部分角色约束，不能证明设备分类、建议与执行等自由文本事实准确。旧 v1/v2 结果保留历史，不自动映射新分类；新版 Schema 使旧结果过期。没有真实模型验证时不能声称本次新格式已真实验证。
 
-已执行验证：合成契约测试通过；仅 PATH 的最小环境下 SDK 导入和构造成功，不依赖 HOME 或额外 CA 环境变量；非法 stdin 只返回固定错误码。
-使用安装后的 Bub/Republic 与本地 HTTPX2 MockTransport 完成一次流式验证：只请求一次、没有 tools、使用 JSON 模式，并保留返回模型、request_id 和用量；未调用外部模型。
-安全诊断验证覆盖非法引用、客户执行证据缺失、执行/结果冲突，以及任意额外字段名和输入值不回显；另以 SDK Mock 流确认截断只产生固定 `output_truncated` 码。
-第二个合成 SDK 边界测试覆盖结构、引用及截断失败后仍保留实际返回模型、请求 ID 和用量，同时排除原文和 Key；使用 MockTransport，不调用外部模型。
-v2 增量先观察旧 schema 拒绝新请求，再观察旧输入模型错误接受缺失参考/基础 Hash、不同会话版本、额外自由文本和概率对象；实现后全部通过。第三个合成测试在真实 Bub/Republic + MockTransport 边界验证有/无参考均可总结、全部会话字段及独立参考完整传递、无工具，以及把参考 run_id 当 message_ids 会失败。结构验证和固定 Mock 输出不能证明真实模型文字正确，未因此增加真实模型调用。
-简化实验：移除仅转发超时调用的包装函数，直接使用 `asyncio.wait_for`，合成测试和 SDK Mock 流验证通过。当前保留 Pydantic 模型是为了共享严格字段与引用约束。
-v2 设计简化检查：继续复用已有消息引用校验和单份 input 序列化，只增加参考结构和版本校验；不建立另一套证据集合、摘要输入转换层或 SDK 包装器。本次为设计检查，没有宣称新的实际消融实验。
+验证：`python/.venv/bin/python -m unittest discover -s python -p 'test_*.py'` 使用合成契约及真实 Bub/Republic+HTTPX2 MockTransport。v3 可空分类、字段证据、角色/公开已发约束先在旧代码失败，再验证通过；保留无工具、一次请求、完整会话/可选参考、未知引用及安全诊断、截断失败仍保留元信息、网络错误分类等既有边界。固定 Mock 文字不代表真实模型业务准确率。Go 另进行同契约二次验证并验证真实本地代理子进程，不访问外部模型。
+
+简化：所有新分类共用 Fact，删除旧 Measure/NextStep 模型和仅服务于旧输出的强制建议/执行枚举逻辑。保留 Pydantic 与固定入口、既有字段/错误白名单，无新 SDK、工具或迁移模块。
 
 ## 直接文件索引
 
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 协议、运行、版本与能力边界 |
-| main.py | 固定入口 | 完整会话与可选参考、SDK、消息引用校验及网络错误安全分类 |
-| test_main.py | 合成契约验证 | 会话完整性、参考隔离、状态、安全诊断与网络失败分类 |
+| main.py | 固定入口 | 完整会话与可选参考、SDK、三类可空事实与来源校验及网络错误分类 |
+| test_main.py | 合成契约验证 | 可空分类、角色/字段证据、完整会话、参考及安全诊断 |
 | pyproject.toml | 依赖声明 | 稳定版本和 Python 兼容范围 |
 | uv.lock | 自动生成锁文件 | 固定全部解析依赖及校验信息 |
 | .venv/ | 忽略的安装产物 | 本机 Python 解释器与依赖 |

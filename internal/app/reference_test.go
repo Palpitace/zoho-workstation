@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成 Jev HTTP 服务和仅接收 stdin 的临时 Python 入口。
-// output: 自动 Bub 等待首次 Jev 结束、完整会话及同版参考/失败空参考的公共边界证据。
+// output: 三段 Bub 总结等待首次 Jev 结束、完整会话及同版参考/失败空参考的公共边界证据。
 // pos: 分析参考调度集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -50,9 +50,9 @@ with open("captured.tmp", "w", encoding="utf-8") as output:
     json.dump(request, output)
 os.replace("captured.tmp", "captured.json")
 print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result": {
-    "current_situation": {"text": "Customer has not upgraded.", "message_ids": ["m2"]},
-    "key_progress": [], "attempted_measures": [], "blockers": [],
-    "next_steps": [{"text": "Confirm whether the suggested upgrade is feasible.", "basis": "recommendation", "message_ids": ["m1", "m2"]}]
+    "device_info": [],
+    "customer_feedback": [{"text": "Customer has not upgraded. Printer still disconnects.", "message_ids": ["m2"]}],
+    "support_responses": [{"text": "Support suggested upgrading firmware; execution is not confirmed.", "message_ids": ["m1"]}]
 }}))
 `
 			if err := os.WriteFile("python/main.py", []byte(entry), 0600); err != nil {

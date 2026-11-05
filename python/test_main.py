@@ -1,5 +1,5 @@
 # input: 合成会话、可选 Jev 参考、结构化模型结果和 SDK 模拟网络错误。
-# output: 会话契约及连接、超时、上游错误安全分类证据，不调用真实模型。
+# output: v3 可空分类、来源引用、完整会话及安全网络诊断的合成证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -22,7 +22,7 @@ class SummaryContractTest(unittest.TestCase):
             "input": {"conversation_hash": "synthetic", "jev_reference": None,
                       "messages": [{"id": "m1", "role": "customer", "body": "Help"}]},
             "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-            "schema_version": "bub-summary-v2",
+            "schema_version": "bub-summary-v3",
         }).encode()
         original = main.republic.get_model
         for error, expected in (
@@ -60,73 +60,59 @@ class SummaryContractTest(unittest.TestCase):
                 self.assertEqual(json.loads(output.getvalue()), {"ok": False, "error": expected})
                 self.assertNotIn("synthetic-private", output.getvalue() + logs.getvalue())
 
-    def test_suggestion_execution_and_references(self):
+    def test_optional_sections_keep_role_evidence(self):
         snapshot = Snapshot.model_validate({
-            "conversation_hash": "synthetic-conversation",
-            "jev_reference": None,
+            "conversation_hash": "synthetic-conversation", "jev_reference": None,
+            "product": "Printer P1", "description": "型号：P1；客户无法打印。",
             "messages": [
-                {"id": "m1", "role": "agent", "body": "请尝试升级固件。"},
-                {"id": "m2", "role": "customer", "body": "已经升级，仍然无法打印。"},
-            ]
+                {"id": "m1", "role": "agent", "body": "请尝试升级固件。", "visibility": "public"},
+                {"id": "m2", "role": "customer", "body": "尚未升级，仍然无法打印。"},
+                {"id": "m3", "role": "agent", "body": "内部计划退款。", "visibility": "private"},
+                {"id": "m4", "role": "agent", "body": "升级建议草稿。", "status": "DRAFT"},
+            ],
         })
         summary = {
-            "current_situation": {"text": "客户升级后仍无法打印。", "message_ids": ["m2"]},
-            "key_progress": [],
-            "attempted_measures": [{
-                "action": "升级固件",
-                "execution_status": "suggested",
-                "result": "此客服消息只提出建议，未报告结果。",
-                "result_status": "unknown",
-                "message_ids": ["m1"],
-            }],
-            "blockers": [],
-            "next_steps": [{
-                "text": "请客户提供仍无法打印时的错误提示。",
-                "basis": "recommendation",
-                "message_ids": ["m2"],
-            }],
+            "device_info": [{"text": "Printer P1", "message_ids": []}],
+            "customer_feedback": [{"text": "客户尚未升级，仍然无法打印。", "message_ids": ["m2"]}],
+            "support_responses": [{"text": "客服建议升级固件；客户尚未确认执行。", "message_ids": ["m1"]}],
         }
-        suggested = validate_summary(json.dumps(summary), snapshot)
-        self.assertEqual(suggested.attempted_measures[0].execution_status, "suggested")
-        confirmed = copy.deepcopy(summary)
-        confirmed["attempted_measures"][0].update({
-            "execution_status": "customer_confirmed_executed",
-            "result_status": "customer_reported",
-            "result": "客户报告升级后仍然无法打印。",
-            "message_ids": ["m2"],
-        })
-        parsed = validate_summary(json.dumps(confirmed), snapshot)
-        self.assertEqual(parsed.attempted_measures[0].result_status, "customer_reported")
-
-        invalid_reference = copy.deepcopy(summary)
-        invalid_reference["current_situation"]["message_ids"] = ["missing"]
-        invalid_execution = copy.deepcopy(summary)
-        invalid_execution["attempted_measures"][0]["execution_status"] = "customer_confirmed_executed"
-        invalid_result = copy.deepcopy(summary)
-        invalid_result["attempted_measures"][0]["result_status"] = "customer_reported"
-        invalid_extra = copy.deepcopy(summary)
-        invalid_extra["synthetic-private-field"] = "synthetic-private-content"
-        for name, value, expected_code in (
-            ("missing reference", invalid_reference, "unknown_reference"),
-            ("agent suggestion is not execution", invalid_execution, "missing_customer_evidence"),
-            ("suggestion has no reported result", invalid_result, "reported_result_without_execution"),
-            ("arbitrary extra key is not diagnostic output", invalid_extra, "schema_validation"),
+        parsed = validate_summary(json.dumps(summary), snapshot)
+        self.assertEqual(parsed.device_info[0].text, "Printer P1")
+        self.assertEqual(parsed.support_responses[0].message_ids, ["m1"])
+        empty = {"device_info": [], "customer_feedback": [], "support_responses": []}
+        self.assertEqual(validate_summary(json.dumps(empty), snapshot).model_dump(), empty)
+        no_messages = snapshot.model_copy(update={"messages": []})
+        self.assertEqual(validate_summary(json.dumps(empty), no_messages).model_dump(), empty)
+        description_device = {**empty, "device_info": [{"text": "型号：P1", "message_ids": []}]}
+        self.assertEqual(validate_summary(json.dumps(description_device), no_messages).device_info[0].text, "型号：P1")
+        for field, refs, expected in (
+            ("customer_feedback", ["missing"], "unknown_reference"),
+            ("customer_feedback", ["m1"], "missing_customer_evidence"),
+            ("support_responses", ["m2"], "missing_support_evidence"),
+            ("support_responses", ["m3"], "missing_support_evidence"),
+            ("support_responses", ["m4"], "missing_support_evidence"),
+            ("customer_feedback", [], "missing_reference"),
         ):
-            with self.subTest(name=name), self.assertRaises(ValidationError) as caught:
-                validate_summary(json.dumps(value), snapshot)
-            diagnostics = validation_diagnostics(caught.exception)
-            self.assertEqual(diagnostics[0]["code"], expected_code)
-            encoded = json.dumps(diagnostics)
-            self.assertNotIn("synthetic-private", encoded)
-            self.assertTrue(all(set(item) == {"loc", "type", "code"} for item in diagnostics))
-            if value is invalid_extra:
-                self.assertEqual(diagnostics[0]["loc"], ["unknown_field"])
+            invalid = copy.deepcopy(summary)
+            invalid[field][0]["message_ids"] = refs
+            with self.subTest(field=field, refs=refs), self.assertRaises(ValidationError) as caught:
+                validate_summary(json.dumps(invalid), snapshot)
+            self.assertEqual(validation_diagnostics(caught.exception)[0]["code"], expected)
+        invalid = {**empty, "device_info": [{"text": "invented printer", "message_ids": []}]}
+        with self.assertRaises(ValidationError):
+            validate_summary(json.dumps(invalid), snapshot)
+        invalid = {**summary, "synthetic-private-field": "synthetic-private-content"}
+        with self.assertRaises(ValidationError) as caught:
+            validate_summary(json.dumps(invalid), snapshot)
+        diagnostics = validation_diagnostics(caught.exception)
+        self.assertEqual(diagnostics[0]["loc"], ["unknown_field"])
+        self.assertNotIn("synthetic-private", json.dumps(diagnostics))
 
     def test_failed_completion_retains_provider_metadata(self):
         invalid_reference = {
-            "current_situation": {"text": "synthetic-private-claim", "message_ids": ["missing"]},
-            "key_progress": [], "attempted_measures": [], "blockers": [],
-            "next_steps": [{"text": "Ask for details", "basis": "recommendation", "message_ids": ["m1"]}],
+            "device_info": [],
+            "customer_feedback": [{"text": "synthetic-private-claim", "message_ids": ["missing"]}],
+            "support_responses": [],
         }
         cases = (
             ("stop", json.dumps({"synthetic-private-field": "synthetic-private-body"}), "schema_validation"),
@@ -162,7 +148,7 @@ class SummaryContractTest(unittest.TestCase):
                             "messages": [{"id": "m1", "role": "customer", "body": "Help"}],
                         },
                         "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-                        "schema_version": "bub-summary-v2",
+                        "schema_version": "bub-summary-v3",
                     })
                     with patch.object(main.republic, "get_model", side_effect=configured):
                         result = await main.summarize(request)
@@ -195,9 +181,9 @@ class SummaryContractTest(unittest.TestCase):
             ],
         }
         summary = {
-            "current_situation": {"text": "客户尚未升级，仍然无法打印。", "message_ids": ["m2"]},
-            "key_progress": [], "attempted_measures": [], "blockers": [],
-            "next_steps": [{"text": "请确认升级条件。", "basis": "recommendation", "message_ids": ["m1", "m2"]}],
+            "device_info": [],
+            "customer_feedback": [{"text": "客户尚未升级，仍然无法打印。", "message_ids": ["m2"]}],
+            "support_responses": [{"text": "客服建议尝试升级固件。", "message_ids": ["m1"]}],
         }
 
         async def verify():
@@ -209,7 +195,7 @@ class SummaryContractTest(unittest.TestCase):
             ):
                 sent = []
                 output = copy.deepcopy(summary)
-                output["current_situation"]["message_ids"] = [cited_id]
+                output["customer_feedback"][0]["message_ids"] = [cited_id]
 
                 def respond(request):
                     sent.append(json.loads(request.content))
@@ -226,7 +212,7 @@ class SummaryContractTest(unittest.TestCase):
                 request = main.Request.model_validate({
                     "input": source,
                     "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-key", "model": "deepseek:synthetic"},
-                    "schema_version": "bub-summary-v2",
+                    "schema_version": "bub-summary-v3",
                 })
                 async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond), trust_env=False) as client:
                     def configured(*args, **kwargs):
@@ -242,7 +228,7 @@ class SummaryContractTest(unittest.TestCase):
                     self.assertEqual(user_inputs, [source])
                     self.assertEqual(result["ok"], cited_id == "m2")
                     if cited_id == "m2":
-                        self.assertEqual(result["result"]["current_situation"]["message_ids"], ["m2"])
+                        self.assertEqual(result["result"]["customer_feedback"][0]["message_ids"], ["m2"])
                     else:
                         self.assertEqual(result["diagnostics"][0]["code"], "unknown_reference")
 

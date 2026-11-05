@@ -1,5 +1,5 @@
 // input: 完整脱敏会话及可选 Jev 参考、显式配置、固定 Python 环境和代理白名单。
-// output: 经结构/引用校验的 Bub 总结与模型标识，或不含凭据的网络分类错误。
+// output: 三类按需事实总结的结构/来源校验与模型标识，或安全分类错误。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -17,89 +17,81 @@ import (
 	"zoho-workstation/internal/config"
 )
 
-const BubSchema = "bub-summary-v2"
+const BubSchema = "bub-summary-v3"
 
 type fact struct {
 	Text       string   `json:"text"`
 	MessageIDs []string `json:"message_ids"`
 }
 type summary struct {
-	CurrentSituation  *fact  `json:"current_situation"`
-	KeyProgress       []fact `json:"key_progress"`
-	AttemptedMeasures []struct {
-		Action          string   `json:"action"`
-		ExecutionStatus string   `json:"execution_status"`
-		Result          string   `json:"result"`
-		ResultStatus    string   `json:"result_status"`
-		MessageIDs      []string `json:"message_ids"`
-	} `json:"attempted_measures"`
-	Blockers  []fact `json:"blockers"`
-	NextSteps []struct {
-		Text       string   `json:"text"`
-		Basis      string   `json:"basis"`
-		MessageIDs []string `json:"message_ids"`
-	} `json:"next_steps"`
+	DeviceInfo       []fact `json:"device_info"`
+	CustomerFeedback []fact `json:"customer_feedback"`
+	SupportResponses []fact `json:"support_responses"`
 }
 
 func ValidateBub(result, input json.RawMessage) error {
+	type evidence struct {
+		ID           string `json:"id"`
+		Role         string `json:"role"`
+		MixedAuthors bool   `json:"mixed_authors"`
+		Visibility   string `json:"visibility"`
+		Status       string `json:"status"`
+	}
 	var source struct {
-		Messages []struct {
-			ID string `json:"id"`
-		} `json:"messages"`
+		Product     string     `json:"product"`
+		Description string     `json:"description"`
+		Messages    []evidence `json:"messages"`
 	}
 	if json.Unmarshal(input, &source) != nil {
 		return errors.New("Bub source is invalid")
 	}
-	ids := map[string]bool{}
+	messages := map[string]evidence{}
 	for _, m := range source.Messages {
-		ids[m.ID] = true
+		messages[m.ID] = m
 	}
 	var output summary
 	decoder := json.NewDecoder(bytes.NewReader(result))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&output) != nil || output.CurrentSituation == nil || output.KeyProgress == nil || output.AttemptedMeasures == nil || output.Blockers == nil || output.NextSteps == nil || len(output.NextSteps) > 3 {
+	if decoder.Decode(&output) != nil || output.DeviceInfo == nil || output.CustomerFeedback == nil || output.SupportResponses == nil {
 		return errors.New("Bub summary schema invalid")
 	}
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
 		return errors.New("Bub summary contains extra output")
 	}
-	refs := func(text string, references []string) bool {
-		if strings.TrimSpace(text) == "" || references == nil || (len(ids) > 0 && len(references) == 0) {
-			return false
+	for section, items := range [][]fact{output.DeviceInfo, output.CustomerFeedback, output.SupportResponses} {
+		if len(items) > 10 {
+			return errors.New("Bub summary exceeds section limit")
 		}
-		for _, id := range references {
-			if !ids[id] {
-				return false
+		for _, item := range items {
+			text := strings.TrimSpace(item.Text)
+			if text == "" || item.MessageIDs == nil {
+				return errors.New("Bub fact lacks valid evidence")
 			}
-		}
-		return true
-	}
-	if !refs(output.CurrentSituation.Text, output.CurrentSituation.MessageIDs) {
-		return errors.New("Bub current situation lacks valid evidence")
-	}
-	for _, f := range append(output.KeyProgress, output.Blockers...) {
-		if !refs(f.Text, f.MessageIDs) {
-			return errors.New("Bub fact lacks valid evidence")
-		}
-	}
-	for _, m := range output.AttemptedMeasures {
-		if !refs(m.Action, m.MessageIDs) || strings.TrimSpace(m.Result) == "" {
-			return errors.New("Bub measure lacks valid evidence")
-		}
-		if m.ExecutionStatus != "suggested" && m.ExecutionStatus != "customer_confirmed_executed" && m.ExecutionStatus != "unknown" {
-			return errors.New("Bub execution status invalid")
-		}
-		if m.ResultStatus != "customer_reported" && m.ResultStatus != "unknown" {
-			return errors.New("Bub result status invalid")
-		}
-		if m.ResultStatus == "customer_reported" && m.ExecutionStatus != "customer_confirmed_executed" {
-			return errors.New("Bub result cannot imply an unconfirmed action was executed")
-		}
-	}
-	for _, f := range output.NextSteps {
-		if !refs(f.Text, f.MessageIDs) || (f.Basis != "recommendation" && f.Basis != "hypothesis") {
-			return errors.New("Bub recommendation invalid")
+			if len(item.MessageIDs) == 0 {
+				if section == 0 && (text == strings.TrimSpace(source.Product) || strings.Contains(source.Description, text)) {
+					continue
+				}
+				return errors.New("Bub fact lacks valid evidence")
+			}
+			customer, support := false, false
+			for _, id := range item.MessageIDs {
+				message, ok := messages[id]
+				if !ok {
+					return errors.New("Bub fact references unknown message")
+				}
+				customer = customer || message.Role == "customer" || message.MixedAuthors
+				support = support || message.Role == "agent" || message.MixedAuthors
+				if section == 2 && (message.Visibility == "private" || strings.EqualFold(message.Status, "DRAFT") || strings.EqualFold(message.Status, "FAILED") || strings.EqualFold(message.Status, "PENDING")) {
+					return errors.New("Bub support response cites an internal or unsent message")
+				}
+			}
+			if section == 1 && !customer {
+				return errors.New("Bub feedback lacks customer evidence")
+			}
+			if section == 2 && !support {
+				return errors.New("Bub response lacks support evidence")
+			}
 		}
 	}
 	return nil
@@ -164,7 +156,7 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 		diagnostic := ""
 		if len(envelope.Diagnostics) > 0 {
 			switch code := envelope.Diagnostics[0].Code; code {
-			case "unknown_reference", "missing_reference", "reference_version_mismatch", "reported_result_without_execution", "missing_customer_evidence", "missing_next_step", "output_truncated", "blank_output", "unexpected_completion_count", "incomplete_generation", "schema_validation", "empty_conversation_not_unknown", "empty_conversation_has_claims":
+			case "unknown_reference", "missing_reference", "reference_version_mismatch", "missing_customer_evidence", "missing_support_evidence", "output_truncated", "blank_output", "unexpected_completion_count", "incomplete_generation", "schema_validation":
 				diagnostic = " (" + code + ")"
 			}
 		}

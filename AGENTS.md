@@ -14,6 +14,7 @@
 
 - 后端 Go、Gin、net/http、encoding/json、log/slog、database/sql、modernc.org/sqlite、原生 SQL；仅 Go 访问数据库。
 - 前端 Svelte 5、TypeScript、Vite、shadcn-svelte、兼容的 Tailwind，按需 Lucide；生产静态资源由 Go 提供。
+- 详情采用紧凑工单信息 → Jev → Bub → 默认折叠的倒序沟通记录；模型结果来源在界面隐藏但继续保存。Bub v3 只输出有依据的设备信息、客户反馈、客服回复/排查，空段不展示；事实引用可展开并定位消息，旧格式结果保留并提示重新总结。
 - Bub 使用核实过的稳定 SDK，通过固定 Python 入口及 stdin/stdout JSON 与 Go 交互；stderr 日志、超时、有限并发，不拼接 Shell。
 - 运行需要 Go 服务及随附 Python 环境；Node 仅参与前端开发和构建。
 - Jev 与 Bub 使用同一版本的完整脱敏会话。先尝试 Jev，再向 Bub 附带同版本的可用评估作补充参考；Jev 关闭、失败或超时不阻止 Bub 独立总结。模型评估不是工单事实，不替代消息证据；不传过期评估，Bub 实际输入版本覆盖附带参考。失败不能阻塞同步或查看，旧输入结果不能覆盖新输入结果。

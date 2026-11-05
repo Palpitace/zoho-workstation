@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单/分析及同步停止/调用计数状态类型、可取消查询和受保护操作。
+// output: 工单/分析（三段可空总结）及同步停止/调用计数类型、可取消查询和受保护操作。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -106,19 +106,13 @@ export type JevView = AnalysisView<{ model: string; answers: Record<string, { ty
 
 type SummaryFact = { text: string; message_ids: string[] };
 export type BubSummaryData = {
-  current_situation: SummaryFact;
-  key_progress: SummaryFact[];
-  attempted_measures: {
-    action: string;
-    execution_status: "suggested" | "customer_confirmed_executed" | "unknown";
-    result: string;
-    result_status: "customer_reported" | "unknown";
-    message_ids: string[];
-  }[];
-  blockers: SummaryFact[];
-  next_steps: (SummaryFact & { basis: "recommendation" | "hypothesis" })[];
+  device_info: SummaryFact[];
+  customer_feedback: SummaryFact[];
+  support_responses: SummaryFact[];
 };
-export type BubView = AnalysisView<{ summary: BubSummaryData; request_id?: string }>;
+// Old summaries stay in storage; their mixed categories must not be relabelled.
+type LegacyBubSummary = { current_situation: SummaryFact };
+export type BubView = AnalysisView<{ summary: BubSummaryData | LegacyBubSummary; request_id?: string }>;
 
 export async function getJSON<T>(path: string, signal: AbortSignal): Promise<T> {
   const response = await fetch(path, { signal, headers: { Accept: "application/json" } });

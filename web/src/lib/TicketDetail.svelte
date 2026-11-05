@@ -1,5 +1,5 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 工单会话、部门移出停止原因、评估总结、无累计额度的重跑提示及事实引用。 -->
+<!-- output: 紧凑工单信息、顺序排列的评估总结和默认折叠的倒序会话。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
@@ -15,6 +15,12 @@
     jev: JevView | null; bub: BubView | null; analysisLoading: boolean; analysisError: string;
     controls: Record<AIKind, ActionFeedback>; onRerun: (kind: AIKind) => void;
   } = $props();
+  const newestMessages = $derived([...(ticket?.messages || [])].sort((a, b) => {
+    const left = Date.parse(a.created_time), right = Date.parse(b.created_time);
+    if (!Number.isFinite(left)) return Number.isFinite(right) ? 1 : 0;
+    if (!Number.isFinite(right)) return -1;
+    return right - left;
+  }));
   const roles: Record<string, string> = { customer: "客户", agent: "客服", unknown: "作者未知" };
   const visibility: Record<string, string> = { public: "公开", private: "内部", unknown: "可见性未知" };
   const messageStates: Record<string, string> = { DRAFT: "草稿，未发送", FAILED: "发送失败", PENDING: "等待发送" };
@@ -39,7 +45,7 @@
         <Badge variant="outline">{ticket.status || "状态未知"}</Badge>
         <Badge variant={ticket.sync_error && !ticket.sync_stopped ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
       </div>
-      <h1 id="page-title" tabindex="-1" class="max-w-4xl text-2xl leading-relaxed font-semibold break-words">{ticket.subject || "无标题工单"}</h1>
+      <h1 id="page-title" tabindex="-1" class="max-w-4xl text-xl leading-relaxed font-semibold break-words">{ticket.subject || "无标题工单"}</h1>
       <p class="text-sm text-muted-foreground">更新于 {dateTime(ticket.modified_time)} · 时间按当前设备时区显示</p>
     </header>
 
@@ -61,23 +67,30 @@
       </details>
     {/if}
 
-    <Card.Root>
-      <Card.Header><Card.Title>工单信息</Card.Title><Card.Description>来自 Zoho 的已保存字段</Card.Description></Card.Header>
-      <Card.Content class="space-y-5">
-        <dl class="grid gap-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
+    <Card.Root size="sm" aria-labelledby="ticket-info-title">
+      <Card.Header><Card.Title id="ticket-info-title" class="text-sm">工单信息</Card.Title></Card.Header>
+      <Card.Content>
+        <dl class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
           <div><dt class="text-muted-foreground">产品</dt><dd class="mt-1 break-words">{ticket.product || "未提供"}</dd></div>
           <div><dt class="text-muted-foreground">Zoho 优先级</dt><dd class="mt-1">{ticket.priority || "未知"}</dd></div>
           <div><dt class="text-muted-foreground">部门 ID</dt><dd class="mt-1 break-all">{ticket.department_id}</dd></div>
           <div><dt class="text-muted-foreground">创建时间</dt><dd class="mt-1 tabular-nums">{dateTime(ticket.created_time)}</dd></div>
         </dl>
-        <div class="border-t pt-4"><h2 class="mb-2 text-sm font-medium">工单描述</h2><p class="text-sm leading-7 whitespace-pre-wrap break-words">{ticket.description || "未提供描述。"}</p></div>
+        {#if ticket.description}
+          <details class="border-t pt-3"><summary class="cursor-pointer text-sm text-muted-foreground">工单描述</summary><p class="mt-2 text-sm leading-7 whitespace-pre-wrap break-words">{ticket.description}</p></details>
+        {/if}
       </Card.Content>
     </Card.Root>
 
-    <section aria-labelledby="conversation-title">
-      <div class="mb-3 flex flex-wrap items-baseline gap-3"><h2 id="conversation-title" class="text-lg font-semibold">沟通记录</h2><span class="text-sm text-muted-foreground">{ticket.messages?.length || 0} 条 · 按时间顺序</span></div>
-      <div class="divide-y rounded-lg border">
-        {#each ticket.messages || [] as message (`${message.source}:${message.id}`)}
+    {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">此工单未纳入自动分析样本，可手动评估或总结。</p>{/if}
+    <JevAssessment view={jev} loading={analysisLoading} error={analysisError} control={controls.jev} onRerun={() => onRerun("jev")} />
+    <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />
+
+    {#key ticket.id}
+    <details id="conversation" class="rounded-lg border" aria-labelledby="conversation-title">
+      <summary class="cursor-pointer px-5 py-4"><span id="conversation-title" class="font-semibold">沟通记录</span><span class="ml-3 text-sm text-muted-foreground">{newestMessages.length} 条 · 时间倒序</span></summary>
+      <div class="divide-y border-t">
+        {#each newestMessages as message (`${message.source}:${message.id}`)}
           <article id={`message-${message.source}-${message.id}`} tabindex="-1" class="scroll-mt-5 p-5 focus:outline-2 focus:outline-ring focus:-outline-offset-2 sm:p-6">
             <header class="mb-4 flex flex-wrap items-center gap-2 text-xs">
               <span class="text-sm font-semibold">{roles[message.role] || "作者未知"}</span>
@@ -105,9 +118,8 @@
           </article>
         {:else}<p class="p-6 text-sm text-muted-foreground">尚无已保存的沟通记录。</p>{/each}
       </div>
-    </section>
-    {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">此工单未纳入自动分析样本，可手动评估或总结。</p>{/if}
-    <JevAssessment view={jev} loading={analysisLoading} error={analysisError} control={controls.jev} onRerun={() => onRerun("jev")} />
-    <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />
+    </details>
+    {/key}
+
   {/if}
 </section>
