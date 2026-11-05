@@ -91,5 +91,5 @@ Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`�
 ## 下载版构建与运行
 
 用户授权增加 Windows x64、macOS Intel/Apple Silicon 自动构建并提交远程；这不包含生产部署。GitHub Actions 构建包含 Go、前端及独立 Python/Bub 环境的包，下载者无需安装开发工具链；操作见 [docs/downloads.md](docs/downloads.md)。源代码仍支持原 .venv 开发方式。
-`python scripts/package.py` 在前端构建后原生打包，`python scripts/smoke_package.py <归档>` 异地解压离线验证。`workstation check` 检查配置、资源和数据库锁，不调用外部服务。
+`python scripts/package.py` 在前端构建后原生打包，`python scripts/smoke_package.py <归档>` 异地解压离线验证。`workstation check` 检查配置、资源、数据库锁及启用的 Python SDK/代理 transport，不调用外部服务。Bub 的 SOCKS 依赖随锁文件和下载包提供；自动/手动/CLI 分析在请求计数前离线预检，环境错误不产生逐票重试风暴，详情见 python/AGENTS.md。
 日志固定在 logs/workstation.log，slog 同时输出终端；lumberjack v2.2.1 实现 10 MiB/3 备份/7 天轮转，启动错误也留存。密钥、正文和 Python 原始 stderr 不写日志。Windows 使用 LockFileEx，Unix 使用 Flock；进程退出释放操作锁。

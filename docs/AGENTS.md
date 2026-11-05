@@ -16,3 +16,5 @@ compatibility.md 追加合并旧工单的只读历史依据/实测限制、背�
 compatibility.md 记录业务全量已同步分析、列表号/分类/筛选及本轮 Matt Pocock TDD 核对。
 
 compatibility.md 记录表头筛选与 Bub v6→Jev v2 升级、等待语义及无数据库迁移的更新方式。
+
+Issue #2 的锁定 SOCKS 依赖与预检依据见 compatibility.md，下载版环境错误处理和旧失败重试步骤见 downloads.md。

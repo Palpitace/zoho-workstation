@@ -108,3 +108,7 @@ Windows x64、macOS x64/arm64 原生构建，工具链固定在 .github/workflow
 依据：[uv Python 发行版](https://docs.astral.sh/uv/concepts/python-versions/)、[uv CLI](https://docs.astral.sh/uv/reference/cli/)、[GitHub runner 平台](https://github.com/actions/runner-images)、[Lumberjack](https://github.com/natefinch/lumberjack)、[Windows LockFileEx](https://pkg.go.dev/golang.org/x/sys/windows#LockFileEx)。下载说明见 downloads.md。macOS 未签名/公证，Windows 未代码签名；不声称已获得系统信任签名。
 
 Intel macOS 验证发现 cryptography 50.0.2 没有对应 wheel；CI 对该锁定版本按[官方静态构建方式](https://cryptography.io/en/latest/installation/#building-cryptography-on-macos)编译并设置 OPENSSL_STATIC=1，打包不复用旧编译缓存。otool 检查 SDK 原生扩展不得依赖 Homebrew 或构建机绝对路径。此处理不更换依赖版本、不增加下载者运行前提。
+
+## Issue #2：SOCKS 代理依赖
+
+已从锁定 httpx2 2.16.0 wheel 元信息核实 socks extra 要求 socksio==1.*；项目显式声明 httpx2[socks]==2.16.0，uv.lock 新增 socksio 1.0.0，其余版本不变。旧包仅导入 SDK，无法发现代理 transport 初始化的缺依赖错误；新包和 Go 离线预检构造实际 transport，支持大小写 ALL_PROXY 与 HTTP(S)_PROXY 共存。已知环境故障在模型尝试前拒绝，运行状态/日志仅含固定错误码及操作提示，代理认证信息不输出。无需数据库迁移或更改总结 Schema。旧失败历史保留，已耗尽自动重试的工单需手动重新总结。

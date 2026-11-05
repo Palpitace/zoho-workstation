@@ -70,3 +70,7 @@ v4 客户反馈例外：只有单条引用，role=unknown、source=thread、dire
 Schema 升级使 v4 旧结果过期，新自动运行仍限原开发集；没有批量手动重跑或修改既有结果。合成 SDK 检查一次请求包含全部四条消息、综合段落保留多条引用；另检查两段消息摘要被拒绝。机械校验仅约束结构及引用，不能证明语义归纳必然正确。
 
 便携包由 scripts/package.py 将独立 CPython 及 uv.lock 依赖装入 runtime/python 和 python/packages，无需用户安装 Python/uv。Go 固定 PYTHONPATH 并禁止用户 site-packages；Windows 仅增加运行所需系统/临时目录环境，不继承密钥。开发仍使用 .venv。
+
+## SOCKS 与离线预检（Issue #2）
+
+显式锁定 httpx2[socks]==2.16.0，沿用 SDK 的同一 HTTP 客户端，新增 socksio==1.0.0，不升级其他依赖。依据已安装 wheel 的 Provides-Extra/Requires-Dist 核实 socks extra；uv.lock 固定 Hash。`main.py --check` 不读 stdin/凭据、不发送网络请求，实际构造并关闭 AsyncClient，覆盖继承代理的 transports。正常总结也先检查环境；缺 SOCKS 依赖、非法代理配置、本地证书/环境问题分别返回 proxy_dependency_missing、proxy_configuration_invalid、python_environment_invalid，不打印异常/代理 URL。测试覆盖大小写 ALL_PROXY、仅 SOCKS、与 HTTP(S) 共存、socks5/socks5h、缺模块以及 CLI 安全错误。

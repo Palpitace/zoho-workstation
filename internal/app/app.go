@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 有界并发同步、可取消退避及全部有效工单的 Bub→Jev 调度，不按累计次数拦截。
+// output: 有界同步及 Bub→Jev 调度；本地环境故障在请求计数前阻断 Bub，不阻塞同步。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -216,6 +216,12 @@ func (a *App) scheduleAnalysis() {
 		if !model.Enabled {
 			continue
 		}
+		if kind == "bub" {
+			if err := analysis.CheckPython(a.ctx); err != nil {
+				a.setError(kind, errors.Join(errPythonUnavailable, err))
+				continue
+			}
+		}
 		for _, record := range records {
 			if !automaticallyEligible(record) {
 				continue
@@ -226,9 +232,6 @@ func (a *App) scheduleAnalysis() {
 			}
 			if err != nil {
 				a.setError(kind, err)
-				if errors.Is(err, errPythonUnavailable) {
-					break
-				}
 			}
 			if a.ctx.Err() != nil {
 				return
@@ -238,6 +241,16 @@ func (a *App) scheduleAnalysis() {
 }
 
 func (a *App) RequestAnalysis(id, kind string) error {
+	if kind == "bub" && a.cfg.Bub.Enabled {
+		a.mu.Lock()
+		ctx := a.ctx
+		a.mu.Unlock()
+		if ctx != nil {
+			if err := analysis.CheckPython(ctx); err != nil {
+				return errors.Join(errPythonUnavailable, err)
+			}
+		}
+	}
 	_, err := a.startAnalysis(id, kind, true)
 	return err
 }
@@ -249,11 +262,6 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	}
 	if !model.Enabled {
 		return false, errors.New("analysis capability is disabled")
-	}
-	if kind == "bub" {
-		if _, err := analysis.PythonExecutable(); err != nil {
-			return false, errPythonUnavailable
-		}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

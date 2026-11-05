@@ -48,3 +48,5 @@ GET /api/tickets 支持 q/status/product 组合，product=__missing__ 选择缺�
 验证边界为现有 App Start/HTTP、Store 的公开接口和外部 HTTP/Python 入口 Mock。缺 manifest/holdout 的自动分析在旧实现观察失败后修复；一小时同步间隔下连续处理两票，排除停止/不完整，失败等待、总结替换/新会话过期与重启复用通过。隔离移除完成唤醒时第二票停滞测试失败，因此保留唤醒，不另加轮询线程。
 
 Python 环境预检和实际执行共用 analysis.PythonExecutable，支持便携包和 Windows venv；后台模型完成/失败写结构化日志（能力、工单 ID、安全错误），不记录输入或输出正文。CLI 互斥回归改用 Store.Lock 公共入口，避免测试依赖 Unix syscall。
+
+Issue #2：每轮自动分析对启用的 Bub 做一次 CheckPython 离线预检，失败写运行错误并跳过该能力，不进入 StartAnalysis、不增加每票失败次数；下轮重检，可恢复。手动 Bub 和研发 CLI 同样先检查，HTTP 返回 503 及安全原因码。同步和已有结果查看不受影响，不增加持久状态或重试表。历史 summary_failed 不清空，已用尽两次自动尝试的旧输入由用户点击重新总结。公共 App/Store 边界验证环境失败零请求、手动重复失败不计次、环境恢复可继续。

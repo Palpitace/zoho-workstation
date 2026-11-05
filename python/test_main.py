@@ -1,10 +1,15 @@
-# input: 合成完整会话、结构化模型结果和 SDK 模拟网络错误。
-# output: v6 整单汇总、单封来信/逐字摘录及可空分类、来源引用、完整会话及安全网络诊断的合成证据。
+# input: 合成会话、模型结果、SDK 模拟错误及隔离代理/缺依赖环境。
+# output: 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断的证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
 import io
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -17,6 +22,49 @@ from main import Snapshot, validate_summary, validation_diagnostics
 
 
 class SummaryContractTest(unittest.TestCase):
+    def test_proxy_transports_construct_without_network(self):
+        async def construct():
+            async with httpx2.AsyncClient(timeout=3):
+                pass
+
+        for key in ("ALL_PROXY", "all_proxy"):
+            for mixed in (False, True):
+                for scheme in ("socks5", "socks5h"):
+                    env = {key: f"{scheme}://synthetic:private@127.0.0.1:7890"}
+                    if mixed:
+                        env.update(HTTP_PROXY="http://127.0.0.1:7891", HTTPS_PROXY="http://127.0.0.1:7891")
+                    with self.subTest(key=key, mixed=mixed, scheme=scheme), patch.dict(os.environ, env, clear=True):
+                        asyncio.run(construct())
+
+    def test_offline_check_reports_safe_local_failures(self):
+        env = {k: v for k, v in os.environ.items() if k.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
+        env["ALL_PROXY"] = "socks5h://synthetic:private@127.0.0.1:7890"
+        entry = str(Path(__file__).with_name("main.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            def check(expected):
+                result = subprocess.run([sys.executable, entry, "--check"], input="", text=True,
+                                        capture_output=True, env=env, timeout=10)
+                self.assertEqual(json.loads(result.stdout), expected)
+                self.assertEqual(result.returncode, 0 if expected["ok"] else 1)
+                self.assertNotIn("synthetic:private", result.stdout + result.stderr)
+
+            check({"ok": True})
+            # Simulate an incomplete distributed environment at its import boundary.
+            Path(directory, "socksio.py").write_text("raise ImportError('synthetic:private')")
+            env["PYTHONPATH"] = directory
+            check({"ok": False, "error": "proxy_dependency_missing"})
+            payload = json.dumps({"input": {"conversation_hash": "synthetic", "messages": []},
+                                  "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
+                                  "schema_version": "bub-summary-v6"})
+            failure = subprocess.run([sys.executable, entry], input=payload, text=True,
+                                     capture_output=True, env=env, timeout=10)
+            self.assertEqual(json.loads(failure.stdout), {"ok": False, "error": "proxy_dependency_missing"})
+            self.assertEqual(failure.returncode, 1)
+            self.assertNotIn("synthetic-private", failure.stdout + failure.stderr)
+            env.pop("PYTHONPATH")
+            env["ALL_PROXY"] = "unsupported://synthetic:private@127.0.0.1:7890"
+            check({"ok": False, "error": "proxy_configuration_invalid"})
+
     def test_single_incoming_message_without_support_reply(self):
         for role, direction, visibility, status, text, accepted in (
             ("customer", "in", "public", "SUCCESS", "Printing overlaps", True),

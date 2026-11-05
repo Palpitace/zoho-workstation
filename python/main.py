@@ -1,5 +1,5 @@
 # input: stdin 中完整脱敏会话、最小模型配置、Schema 和允许的代理环境。
-# output: 整单综合归纳的三类事实及原文引用或安全诊断，不推断作者身份。
+# output: 整单事实/引用、安全诊断及无网络代理环境预检，不推断作者身份。
 # pos: Go 到无工具 Bub Core 的固定进程入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from dataclasses import asdict
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
+import httpx2
 import republic
 from bub.core import Agent
 from loguru import logger
@@ -240,7 +241,25 @@ text 是连贯的综合摘要，可分短段表达不同问题，但不能拼接
 """
 
 
+async def check_runtime() -> dict[str, Any]:
+    # Construct the SDK's real transport, including every inherited proxy.
+    # No send/request is made; exceptions may contain proxy credentials.
+    try:
+        async with httpx2.AsyncClient(timeout=3):
+            pass
+    except ImportError:
+        return {"ok": False, "error": "proxy_dependency_missing"}
+    except ValueError:
+        return {"ok": False, "error": "proxy_configuration_invalid"}
+    except OSError:
+        return {"ok": False, "error": "python_environment_invalid"}
+    return {"ok": True}
+
+
 async def summarize(request: Request) -> dict[str, Any]:
+    environment = await check_runtime()
+    if not environment["ok"]:
+        return environment
     responses: list[republic.Response[Any]] = []
 
     async def capture(call):
@@ -304,10 +323,20 @@ async def summarize(request: Request) -> dict[str, Any]:
     return {"ok": True, "result": result.model_dump(mode="json"), **metadata}
 
 
+def emit(result: dict[str, Any]) -> int:
+    sys.stdout.write(json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n")
+    if not result["ok"]:
+        sys.stderr.write("bub: " + result["error"] + "\n")
+        return 1
+    return 0
+
+
 def main() -> int:
     # Package exceptions may contain provider bodies or validation input; emit
     # only our own codes, with no traceback or SDK logging handlers.
     logger.remove()
+    if sys.argv[1:] == ["--check"]:
+        return emit(asyncio.run(check_runtime()))
     result: dict[str, Any]
     try:
         payload = sys.stdin.buffer.read(MAX_STDIN_BYTES + 1)
@@ -345,11 +374,7 @@ def main() -> int:
         except Exception:
             # The process boundary must not print unexpected sensitive errors.
             result = {"ok": False, "error": "summary_failed"}
-    sys.stdout.write(json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n")
-    if not result["ok"]:
-        sys.stderr.write("bub: " + result["error"] + "\n")
-        return 1
-    return 0
+    return emit(result)
 
 
 if __name__ == "__main__":

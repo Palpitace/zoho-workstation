@@ -40,3 +40,5 @@ v4 客户反馈例外：只有单条引用，role=unknown、source=thread、dire
 便携包由 PythonExecutable 优先选择 runtime/python 下的平台解释器，源代码回退 python/.venv/bin/python 或 Windows Scripts/python.exe。PYTHONPATH 仅指向本地 python/packages，禁用用户 site-packages；Windows 另白名单继承 SystemRoot/WINDIR/TEMP/TMP，PATH 仅解释器目录和系统目录。不继承父 PYTHONPATH/PYTHONHOME 或凭据。测试仍通过真实子进程校验代理和环境隔离。
 
 CheckPython 与 Bub 共用最小进程环境，离线导入真实入口及 SDK，配置密钥不传给该检查；失败返回安全错误，30 秒超时，不回显 Python traceback。
+
+Issue #2：CheckPython 调用固定入口 `--check`，通过实际 HTTPX2 transport 构造检查 SOCKS/代理依赖，解析有界 JSON，仅映射已知错误码到安全恢复提示，不读取凭据或发送请求。Bub 输出白名单增加 proxy_dependency_missing/proxy_configuration_invalid/python_environment_invalid；原始异常仍不回显。离线预检使用与总结相同的代理环境。

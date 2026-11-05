@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成 Jev HTTP 服务和仅接收 stdin 的临时 Python 入口。
-// output: Bub 先总结、Jev 只读当前总结，失败等待、持续处理及缓存复用的公共边界证据。
+// output: Bub→Jev 顺序、环境失败零请求及修复恢复、持续处理和缓存复用的证据。
 // pos: 总结到评估流水线集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -37,6 +37,10 @@ func TestAutomaticJevWaitsForCurrentBubSummary(t *testing.T) {
 				t.Fatalf("isolated Python: %v %s", err, output)
 			}
 			entry := `import json, os, sys, time
+if sys.argv[1:] == ["--check"]:
+    failed = os.path.exists("environment-failure")
+    print(json.dumps({"ok": False, "error": "proxy_dependency_missing"} if failed else {"ok": True}))
+    sys.exit(1 if failed else 0)
 request = json.load(sys.stdin)
 with open("captured-" + request["input"]["ticket_id"] + ".json", "w") as f:
     json.dump(request, f)
@@ -122,10 +126,51 @@ else:
 			if err != nil {
 				t.Fatal(err)
 			}
+			if success {
+				if err := os.WriteFile("environment-failure", nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err = service.Start(ctx); err != nil {
 				t.Fatal(err)
 			}
 			defer service.Close()
+			if success {
+				blocked := false
+				for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+					req := httptest.NewRequest("GET", "/api/status", nil)
+					req.Host = "localhost:8080"
+					w := httptest.NewRecorder()
+					service.Handler().ServeHTTP(w, req)
+					if strings.Contains(w.Body.String(), "proxy_dependency_missing") {
+						blocked = true
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if !blocked {
+					t.Fatal("local environment failure not reported before model attempts")
+				}
+				for i := 0; i < 2; i++ {
+					if err := service.RequestAnalysis("1", "bub"); err == nil || !strings.Contains(err.Error(), "proxy_dependency_missing") {
+						t.Fatalf("local failure must reject manual analysis safely: %v", err)
+					}
+				}
+				budget, err := db.AnalysisBudget(ctx, app.DevelopmentRound)
+				if err != nil || budget.Total != 0 {
+					t.Fatalf("local failure consumed attempts: %+v %v", budget, err)
+				}
+				if _, err := os.Stat("captured-1.json"); !os.IsNotExist(err) {
+					t.Fatal("model received data despite local failure")
+				}
+				if err := os.Remove("environment-failure"); err != nil {
+					t.Fatal(err)
+				}
+				if err := service.RequestAnalysis("1", "bub"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
 			read := func(id string) map[string]app.AIStatus {
 				req := httptest.NewRequest("GET", "/api/tickets/"+id, nil)
 				req.Host = "localhost:8080"

@@ -1,5 +1,5 @@
 // input: 合成 Bub JSON、固定消息引用、隔离子进程及本地模拟代理。
-// output: 整单汇总数量约束、单封来信/未知作者逐字证据及三类来源约束、必要代理继承及凭据环境隔离证据。
+// output: 整单事实/来源约束、代理继承与凭据隔离、离线环境安全诊断证据。
 // pos: Python 输出进入 Go 的验证边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis_test
 
@@ -121,5 +121,30 @@ func TestBubSingleIncomingMessage(t *testing.T) {
 				t.Fatalf("accepted=%t want=%t: %v", err == nil, tc.ok, err)
 			}
 		})
+	}
+}
+
+func TestBubOfflineEnvironmentCheck(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"} {
+		t.Setenv(key, "")
+	}
+	for _, tc := range []struct{ proxy, code string }{
+		{"socks5h://synthetic:private@127.0.0.1:7890", ""},
+		{"unsupported://synthetic:private@127.0.0.1:7890", "proxy_configuration_invalid"},
+	} {
+		t.Setenv("ALL_PROXY", tc.proxy)
+		err := analysis.CheckPython(context.Background())
+		if tc.code == "" {
+			if err != nil {
+				t.Fatal(err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), tc.code) || strings.Contains(err.Error(), "synthetic:private") {
+			t.Fatalf("expected safe %s, got %v", tc.code, err)
+		}
 	}
 }

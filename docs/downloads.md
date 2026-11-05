@@ -28,3 +28,13 @@ Windows 可用记事本打开日志，或在应用目录运行 PowerShell：`Get
 ## 更新
 
 先 Ctrl+C 停止旧服务并备份 `.env` 与 `data`，将新包解压到一个新目录，再复制自己的 `.env` 和整个 `data` 目录过去；需要留存历史日志时一起复制 logs。不要用下载包覆盖正在使用的数据库。包不包含用户配置或数据，也不会自动升级、开机启动或修改 Zoho 工单。首次启动仍遵守固定采样范围，启用模型会按配置自动分析。
+
+## SOCKS 代理与 Bub 环境错误
+
+下载包包含 SOCKS 支持，可继承 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 及小写形式。启动检查会离线构造 HTTP 客户端，但不会验证代理网络连通性。
+
+- `proxy_dependency_missing`：重新下载完整新版包；源码部署执行 `uv sync --project python --locked --no-dev`。
+- `proxy_configuration_invalid`：检查代理环境变量的协议/地址，修正后重启；不要将含认证信息的代理地址贴入问题报告。
+- `python_environment_invalid`：检查本地证书与 Python 环境设置。
+
+自动分析在环境检查失败时暂停 Bub，不增加每张工单的模型尝试数，同步和查看不受影响。升级不会删除此前失败记录；已达到两次自动尝试上限的旧工单，确认启动检查通过后点击“重新总结”。

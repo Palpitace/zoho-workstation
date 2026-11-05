@@ -1,5 +1,5 @@
 // input: 完整脱敏会话、显式配置、固定 Python 环境和代理白名单。
-// output: 整单三类汇总和未知作者入站原文摘录的校验与模型标识，或安全错误。
+// output: 整单汇总校验、离线代理 transport 检查及安全环境/模型错误。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -160,7 +160,7 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 			}
 		}
 		switch envelope.Error {
-		case "invalid_input", "model_timeout", "model_connection_failed", "model_upstream_failed", "model_request_failed", "invalid_summary", "summary_failed":
+		case "invalid_input", "model_timeout", "model_connection_failed", "model_upstream_failed", "model_request_failed", "invalid_summary", "summary_failed", "proxy_dependency_missing", "proxy_configuration_invalid", "python_environment_invalid":
 			return nil, envelope.ReturnedModel, errors.New("Bub: " + envelope.Error + diagnostic)
 		default:
 			return nil, "", errors.New("Bub did not return a successful structured result")
@@ -194,16 +194,35 @@ func PythonExecutable() (string, error) {
 	return "", errors.New("Bub Python environment is unavailable")
 }
 
-// CheckPython imports the actual SDK with the same isolated environment as Bub.
+// CheckPython constructs SDK transports with the same isolated environment as Bub.
 // It never receives credentials or makes provider requests.
 func CheckPython(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	command, err := pythonCommand(ctx, "-c", "import sys; sys.path.insert(0, 'python'); import main")
+	command, err := pythonCommand(ctx, "python/main.py", "--check")
 	if err != nil {
 		return err
 	}
-	if err = command.Run(); err != nil {
+	var output limitedOutput
+	command.Stdout = &output
+	command.Stderr = io.Discard
+	processErr := command.Run()
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	decodeErr := json.Unmarshal(output.Bytes(), &result)
+	if decodeErr == nil && !result.OK {
+		switch result.Error {
+		case "proxy_dependency_missing":
+			return errors.New("Bub: proxy_dependency_missing; restore the complete package or install the locked Python environment")
+		case "proxy_configuration_invalid":
+			return errors.New("Bub: proxy_configuration_invalid; correct HTTP(S)_PROXY/ALL_PROXY and restart")
+		case "python_environment_invalid":
+			return errors.New("Bub: python_environment_invalid; check local certificate and Python environment settings")
+		}
+	}
+	if processErr != nil || decodeErr != nil || !result.OK {
 		return errors.New("Bub Python dependencies unavailable; restore the complete package or install the locked environment")
 	}
 	return nil

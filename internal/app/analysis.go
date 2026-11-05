@@ -1,5 +1,5 @@
 // input: 已保存工单、根配置和研发轮次/数量限制。
-// output: 脱敏开发副本、Bub 总结到 Jev 评估的版本化输入及可追溯结果。
+// output: 脱敏副本、版本化分析与可追溯结果；本地环境预检失败不计模型请求。
 // pos: 分析命令编排与本地验证入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -165,8 +165,8 @@ func AnalyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, lim
 		return errors.New("requested analysis capability is disabled")
 	}
 	if kind == "bub" {
-		if _, err := analysis.PythonExecutable(); err != nil {
-			return errors.New("Bub Python environment is not installed")
+		if err := analysis.CheckPython(ctx); err != nil {
+			return err
 		}
 	}
 	release, err := db.Lock("analysis")

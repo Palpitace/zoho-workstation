@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 工单号/链接、组合筛选、问题分类和实际输入版本与等待总结状态、同步并发配置、调用计数和受保护操作。
+// output: 工单号/链接、组合筛选、问题分类和实际输入版本与等待总结状态、同步并发配置、调用计数和受保护操作；环境故障返回安全原因码。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -324,7 +324,7 @@ func operationResponse(c *gin.Context, err error) {
 	case errors.Is(err, store.ErrBusy):
 		apiError(c, 409, "operation already running")
 	case errors.Is(err, errPythonUnavailable):
-		apiError(c, 503, "Bub Python environment is unavailable")
+		apiError(c, 503, err.Error())
 	case errors.Is(err, sql.ErrNoRows):
 		apiError(c, 404, "ticket not available")
 	default:
