@@ -9,9 +9,9 @@
 - 完成：显式声明 httpx2[socks]==2.16.0，锁定 socksio 1.0.0，其余依赖版本不变。Python --check 与总结共用真实 transport 构造，输出固定环境错误码；Go 预检解析有界 JSON 并给出安全恢复提示。大小写代理白名单/凭据隔离保持。
 - 重试：自动每轮对 Bub 做一次离线环境检查；手动和 CLI 同样在 StartAnalysis 前检查。确定性本地失败不增加票级次数、不调用模型，同步及查看可继续；下轮/手动可复查恢复。不清空历史；旧输入已耗尽自动重试时需手动重新总结。
 - TDD：8 组 SOCKS/混合代理构造在旧依赖上全失败，补依赖后通过；Python --check、Go CheckPython 和 App 零请求预检均先观察失败再通过。沿用真实子进程/SDK HTTP/公开 App-Store 边界；没有新增内部 Mock 接口。
-- 验证：Go 全部测试、go vet、app/analysis race、Python 7 项测试通过。前端只复用既有源码完成打包构建，无界面改动。Linux 完整便携包异地解压验收通过，含真实 Go→Python 的大小写/仅 SOCKS/混合代理、移开 socksio 后安全失败及恢复；全部离线，真实模型/Zoho 请求 0。三平台原生 CI 待推送后核对。
+- 验证：Go 全部测试、go vet、app/analysis race、Python 7 项测试通过。前端只复用既有源码完成打包构建，无界面改动。Linux 完整便携包异地解压验收通过，含真实 Go→Python 的大小写/仅 SOCKS/混合代理、移开 socksio 后安全失败及恢复；全部离线，真实模型/Zoho 请求 0。修复提交 88a0c384e029e6ac93aede7590ca7091be696079 的 [Actions 42025245623](https://github.com/Palpitace/zoho-workstation/actions/runs/42025245623) Windows x64、Intel Mac、Apple Silicon 原生测试、打包和解压运行检查全部成功。
 - 消融/审查：删除旧的仅检查解释器存在分支，统一沿用 CheckPython；模型输出和离线检查复用一个安全 JSON 输出函数，无新队列/表/配置或错误持久化系统。扫描 check、自动、手动及 CLI 四类调用入口并补齐，代理配置仍交给真实客户端处理，无重复代理解析器。相关 AGENTS、代码头、兼容/下载步骤已同步。
-- 下一步：完成文档检查及提交前审查，推送 main，核对原生 CI 与新版 Windows 下载包。
+- 交付：修复已推送 main，三平台下载产物已上传。旧运行目录未更新；用户按 docs/downloads.md 解压新包并迁移 .env/data，旧失败已耗尽次数时手动重新总结。没有真实代理联网或真实模型验证；包内检查仅证明 transport 可构造和安全诊断。最终验证记录单独提交并跳过重复 CI。
 
 ## Windows/macOS 自动构建与下载版日志（2026-11-05）
 
