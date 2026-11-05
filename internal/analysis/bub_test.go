@@ -1,5 +1,5 @@
 // input: 合成 Bub JSON、固定消息引用、隔离子进程及本地模拟代理。
-// output: 单封来信/未知作者逐字证据及三类来源约束、必要代理继承及凭据环境隔离证据。
+// output: 整单汇总数量约束、单封来信/未知作者逐字证据及三类来源约束、必要代理继承及凭据环境隔离证据。
 // pos: Python 输出进入 Go 的验证边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis_test
 
@@ -24,6 +24,15 @@ func TestBubOptionalSectionsRequireRoleEvidence(t *testing.T) {
 	result := `{"device_info":[{"text":"Printer P1","message_ids":[]}],"customer_feedback":[{"text":"Customer has not upgraded","message_ids":["m2"]}],"support_responses":[{"text":"Agent suggested upgrading; not confirmed executed","message_ids":["m1"]}]}`
 	if err := analysis.ValidateBub(json.RawMessage(result), input); err != nil {
 		t.Fatal(err)
+	}
+	for _, section := range []string{"customer_feedback", "support_responses"} {
+		var fragmented map[string][]map[string]any
+		json.Unmarshal([]byte(result), &fragmented)
+		fragmented[section] = append(fragmented[section], fragmented[section][0])
+		body, _ := json.Marshal(fragmented)
+		if err := analysis.ValidateBub(body, input); err == nil {
+			t.Fatalf("per-message fragments accepted for %s", section)
+		}
 	}
 	if err := analysis.ValidateBub(json.RawMessage(`{"device_info":[],"customer_feedback":[],"support_responses":[]}`), json.RawMessage(`{"messages":[]}`)); err != nil {
 		t.Fatal(err)

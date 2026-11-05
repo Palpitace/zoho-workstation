@@ -1,5 +1,5 @@
 // input: 只读 Zoho 客户端、SQLite 存储、固定采样限制和回查窗口。
-// output: 有界并发读取、串行持久化及删除/移出停止；限流取消不丢水位。
+// output: 有界并发读取、串行持久化及合并/删除/移出停止；限流取消不丢水位。
 // pos: 拉取、清洗与保存的同步编排边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer
 
@@ -169,7 +169,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 				continue
 			}
 			result.Remaining--
-			if errors.Is(err, zoho.ErrOutsideDepartment) || errors.Is(err, zoho.ErrDeleted) {
+			if errors.Is(err, zoho.ErrOutsideDepartment) || errors.Is(err, zoho.ErrDeleted) || errors.Is(err, zoho.ErrMerged) {
 				if err = db.StopSync(ctx, id, err.Error()); err != nil {
 					return result, err
 				}

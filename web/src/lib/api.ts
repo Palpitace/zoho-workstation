@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单/分析、同步并发/停止和调用计数类型、可取消查询和受保护操作。
+// output: 工单/分析、同步并发/合并停止和调用计数类型、可取消查询和受保护操作。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -159,6 +159,7 @@ export function dateTime(value?: string): string {
 }
 
 export function syncLabel(record: TicketRecord): string {
+  if (record.sync_stopped && record.sync_error === "ticket confirmed merged in Zoho") return "已合并";
   if (record.sync_stopped) return record.sync_error === "ticket confirmed deleted in Zoho" ? "Zoho 已删除" : "已停止同步";
   if (record.sync_error) return "同步失败，等待重试";
   if (record.pending) return "待同步";

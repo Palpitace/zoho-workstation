@@ -27,8 +27,8 @@ Get 单次查询同时读取原始/规范化快照，避免并发同步时混用
 
 初次 Reserve 在事务中固定最多 50 个唯一 ID；失败、停止和重启不释放名额。原始与规范化 JSON 分列原子保存。sync_state.batch_upper 固定可恢复批次时间，tickets.checked_at 保存最近尝试时间；Failure 保留旧快照，syncer 据此独立冷却重试。
 
-仅成功确认工单已删除或移出部门才调用 StopSync(ctx,id,reason)：sync_stopped=true、固定安全说明和 checked_at 原子写入，保留快照与 AI 历史，Save 拒绝覆盖已停止记录。Get/List 同时返回停止状态；State.Failed 只统计可重试错误，停止原因仍在列表/详情可见。
+仅成功确认工单已合并、删除或移出部门才调用 StopSync(ctx,id,reason)：sync_stopped=true、固定安全说明和 checked_at 原子写入，保留快照与 AI 历史，Save 拒绝覆盖已停止记录。Get/List 同时返回停止状态；State.Failed 只统计可重试错误，停止原因仍在列表/详情可见。
 
 Finish 的 watermark 非空表示候选已全部处理（允许存在独立持久失败），更新水位并清空批次；空值只更新错误，不推进或清空窗口。全局错误/取消由调用方传空值。重试义务不依赖水位。老数据库仅非破坏性增加 batch_upper、sync_stopped 默认值列，不改已有快照、AI 记录或预算。
 
-删除原因使用固定 ticket confirmed deleted in Zoho，部门变化使用固定安全原因；都复用 sync_error/sync_stopped，未增表或迁移。已停止项不自动恢复读取；Zoho 恢复已删除工单后的重新启用不在本次实现中。
+合并原因使用固定 ticket confirmed merged in Zoho，删除原因使用固定 ticket confirmed deleted in Zoho，部门变化使用固定安全原因；都复用 sync_error/sync_stopped，未增表或迁移。已停止项不自动恢复读取；Zoho 恢复已删除工单后的重新启用不在本次实现中。

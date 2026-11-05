@@ -1,5 +1,5 @@
 // input: Zoho OAuth 配置、限定部门与调用方 context。
-// output: 完整只读会话、固定 ID 复核、明确删除/迁移及安全限流诊断。
+// output: 完整只读会话、固定 ID 复核、失效元数据复核及安全限流诊断。
 // pos: Zoho HTTP 与本地采样的边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho
 
@@ -295,7 +295,7 @@ func (c *Client) changedMetadata(ctx context.Context, ids []string, since, until
 			changed = append(changed, id)
 			continue
 		}
-		if field(body, "id") != id || field(body, "departmentId") != c.cfg.DepartmentID {
+		if c.checkTicket(body, id) != nil {
 			changed = append(changed, id)
 			continue
 		}
@@ -311,8 +311,8 @@ func (c *Client) changedMetadata(ctx context.Context, ids []string, since, until
 	return changed, nil
 }
 
-// Fetch retains exact business responses and merges truncated thread content separately.
-func (c *Client) Fetch(ctx context.Context, id string) (ticket.RawSnapshot, error) {
+// fetchSnapshot retains exact business responses and merges truncated thread content separately.
+func (c *Client) fetchSnapshot(ctx context.Context, id string) (ticket.RawSnapshot, error) {
 	raw := ticket.RawSnapshot{Complete: true, Evidence: map[string]json.RawMessage{}}
 	if !idPattern.MatchString(id) {
 		return raw, errors.New("invalid ticket ID")

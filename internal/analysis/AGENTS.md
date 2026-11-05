@@ -22,13 +22,17 @@ Jev Schema 为 jev-assessment-v1。使用官方 POST systemone 的 model/state/q
 
 Jev 与 Bub 使用同一完整脱敏会话，不以总结代替评估输入。会话 Hash 包含消息事实、角色、可见性、发送状态、时间及附件元数据，排除工单状态/优先级/编辑时间和部门。超过 512 KiB 拒绝发送，不静默截断。自动脱敏有局限，沿用 ticket/AGENTS.md；真实发送前在本地 data/ 留副本并检查。
 
-Bub Schema 为 bub-summary-v4；完整会话额外包含 conversation_hash 与 jev_reference（无参考时为 null）。参考仅传模型评估标签、来源运行 ID、会话 Hash、Schema 和请求/返回模型标识，不传凭据或概率。评估不充当原始消息或事实引用；参考会话版本不匹配直接拒绝。Bub Hash 覆盖完整实际输入，参考增删或替换会使旧总结过期；旧 v1/v2 总结保留为过期历史，不按新分类自动改写。来源选择由 app 读取当前会话版本的成功 Jev 结果完成。
+Bub Schema 为 bub-summary-v5；完整会话额外包含 conversation_hash 与 jev_reference（无参考时为 null）。参考仅传模型评估标签、来源运行 ID、会话 Hash、Schema 和请求/返回模型标识，不传凭据或概率。评估不充当原始消息或事实引用；参考会话版本不匹配直接拒绝。Bub Hash 覆盖完整实际输入，参考增删或替换会使旧总结过期；旧 v1/v2 总结保留为过期历史，不按新分类自动改写。来源选择由 app 读取当前会话版本的成功 Jev 结果完成。
 输入超限仍返回对应 Hash 以保存本地失败版本，但不返回可发送正文；本地失败不计为模型调用。
 
-用户指定的新输出固定为 device_info、customer_feedback、support_responses 三个数组，每类最多 10 项，每项 `{text,message_ids}`。无依据则空数组，不填占位语，不再生成强制当前情况、卡点或下一步建议。Python Prompt 明确建议不等于执行，客户的执行/实际结果归入反馈并引用客户发言；客服分类只描述已经回复或给予的排查，不推断客户已照做。
+用户指定的新输出固定为 device_info、customer_feedback、support_responses 三个数组，设备最多 10 项、客户反馈和客服回复各最多 1 项，每项 `{text,message_ids}`。无依据则空数组，不填占位语，不再生成强制当前情况、卡点或下一步建议。Python Prompt 明确建议不等于执行，客户的执行/实际结果归入反馈并引用客户发言；客服分类只描述已经回复或给予的排查，不推断客户已照做。
 
 通常必须引用真实消息。客户反馈至少包含 customer/mixed_authors 证据；客服回复至少包含 agent/mixed_authors 证据，引用中不能含 private 或 DRAFT/FAILED/PENDING 消息。混合转录的逐句归属仍由模型根据正文判断。device_info 唯一允许无消息引用的例外：text 必须逐字等于工单 product 或为 description 中逐字片段，前端可显示“工单字段”；Prompt 禁止拼接或省略否定/条件改变含义。此机械校验不证明摘录必然是设备信息或所有模型文本正确。
 
 简化：三类统一复用 fact，删除旧 Measure/NextStep 及只为旧字段服务的枚举校验。v3 引用与可空分类已在旧实现观察失败后通过；代理和 SDK Mock 保持，不新增依赖、自动迁移旧结果或真实调用。
 
 v4 客户反馈例外：只有单条引用，role=unknown、source=thread、direction=in、visibility=public、status=SUCCESS 且 text 为 body 连续逐字片段时允许保存。不是将 role 改成 customer，也不是任意未知作者或客服转述豁免；页面标注来信原文/作者未确认。Prompt 要求完整保留否定/条件，不翻译改写，客服回复缺失时 support_responses=[]。Go/Python 同步校验；Schema 升级使旧失败版本不再挡住新版本重试，旧结果继续保留。单封正常客户来信也不要求有客服回复。测试先在旧校验拒绝未知作者原文，再在新校验通过，同时拒绝改写、客服、内部、出站和草稿证据。实际只调用 1 次配置的 Bub 模型，使用合成单封未知作者来信，返回 1 条原文反馈、0 条客服回复；不代表所有实际模型输出都能通过。
+
+2026-11-05 整单汇总 v5：仍一次发送完整会话。device_info 最多 10 项；customer_feedback/support_responses 各最多 1 项（无内容为空），text 综合同一工单的主要问题、实际处理进展与当前状态，message_ids 可覆盖多条证据。按主题合并重复内容，禁止逐线程罗列，保持建议/执行/结果区分，不新增评估或下一步建议。Python/Go 双重校验数量，结构形状不变，无新表或二次总结调用。未知作者例外仍限单条逐字引用，不为了归纳而推断身份。
+
+Schema 升级使 v4 旧结果过期，新自动运行仍限原开发集；没有批量手动重跑或修改既有结果。合成 SDK 检查一次请求包含全部四条消息、综合段落保留多条引用；另检查两段消息摘要被拒绝。机械校验仅约束结构及引用，不能证明语义归纳必然正确。

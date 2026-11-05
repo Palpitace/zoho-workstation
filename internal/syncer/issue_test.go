@@ -1,5 +1,5 @@
-// input: 固定样本的删除/部门迁移、不可见及缺少线程响应。
-// output: 单票失败独立重试、历史保留、删除/部门停止和跨重启水位推进证据。
+// input: 固定样本的合并/删除/部门迁移、不可见及缺少线程响应。
+// output: 单票失败独立重试、历史保留、合并/删除/部门停止和跨重启水位推进证据。
 // pos: Issue 1 的同步回归测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer_test
 
@@ -24,7 +24,7 @@ import (
 )
 
 func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
-	for _, mode := range []string{"moved_before", "moved_during", "deleted", "deleted_during", "missing_404", "missing_403", "incomplete", "initial_incomplete"} {
+	for _, mode := range []string{"moved_before", "moved_during", "deleted", "deleted_during", "merged", "missing_404", "missing_403", "incomplete", "initial_incomplete"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			var reads, conversations atomic.Int32
@@ -54,7 +54,7 @@ func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
 								if n%2 == 0 {
 									department = "8"
 								}
-							case "missing_404":
+							case "merged", "missing_404":
 								w.WriteHeader(404)
 								return
 							case "missing_403":
@@ -66,6 +66,12 @@ func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
 						}
 					}
 					json.NewEncoder(w).Encode(map[string]any{"isDeleted": deleted, "id": id, "departmentId": department, "subject": "new snapshot", "createdTime": stamp, "modifiedTime": stamp, "threadCount": count, "commentCount": "0"})
+				case "/api/v1/tickets/1/History":
+					if mode == "merged" {
+						fmt.Fprint(w, `{"data":[{"eventName":"TicketMergedChild"}]}`)
+					} else {
+						fmt.Fprint(w, `{"data":[]}`)
+					}
 				case "/api/v1/tickets/1/threads":
 					conversations.Add(1)
 					if strings.Contains(mode, "incomplete") && !repaired.Load() {
@@ -123,7 +129,7 @@ func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
 			body, _ := json.Marshal(bad)
 			var view map[string]any
 			json.Unmarshal(body, &view)
-			moved := strings.HasPrefix(mode, "moved") || strings.HasPrefix(mode, "deleted")
+			moved := strings.HasPrefix(mode, "moved") || strings.HasPrefix(mode, "deleted") || mode == "merged"
 			if (view["sync_stopped"] == true) != moved || bad.SyncError == "" {
 				t.Fatalf("wrong move/failure classification: %s", body)
 			}
@@ -206,6 +212,8 @@ func TestSlowBatchDoesNotRetryAlreadyCoveredFailures(t *testing.T) {
 		case "/api/v1/tickets/1":
 			failedReads.Add(1)
 			w.WriteHeader(404)
+		case "/api/v1/tickets/1/History":
+			fmt.Fprint(w, `{"data":[]}`)
 		case "/api/v1/tickets/search":
 			fmt.Fprint(w, `{"data":[]}`)
 		case "/api/v1/tickets/2":

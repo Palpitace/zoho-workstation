@@ -8,6 +8,8 @@
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 读取边界与文件索引 |
 | client.go | HTTP 边界 | 最近工单、固定 ID 增量与局部失败回退、消息分页及截断补全 |
+| lifecycle.go | 失效复核 | Fetch 入口，对删除/404/410 工单有界读取历史确认合并/删除 |
+| lifecycle_test.go | 生命周期回归 | 合并/恢复/权限/限流及删除时间窗遗漏的合成验证 |
 | client_test.go | 合成协议测试 | 分页、固定 ID/部门边界、局部/全局回退错误及完整正文及搜索缺失复核 |
 
 依据固定的 docs/zoho-oas；列表仅按 -createdTime 排序。错误只报告阶段、HTTP 状态及白名单固定权限错误码，不打印响应正文、Token 或 URL 查询。私有 HTTP 状态错误保留请求方法，避免把 OAuth POST 的 403 当成业务搜索权限问题。
@@ -35,3 +37,11 @@ Fetch 在详情开始及结束都校验返回 ID 和部门。只有匹配原请�
 HTTP 429 的 RetryAfter 只暴露等待时长，支持 Retry-After 秒数/HTTP 日期，无有效值默认 30 秒，长秒数不缩短为默认值、溢出保守饱和到最大可表示等待；不打印头、代理、URL 或响应正文。syncer 收到后停止当前批次，app 可取消地等待至少该时长。同步器可有界并行调用 Fetch，但单张工单内部分页/线程详情仍顺序读取；没有自动业务写入。
 
 实测修正（2026-11-05）：指定失败样本有 isDeleted=true 且 threads 返回 404；Fetch 在前后两次详情验证时读取严格布尔 isDeleted，仅同部门明确删除返回 ErrDeleted，不依赖 404 猜测。另一样本 threadCount=2 而完整分页实际返回 3 条（不同 channel）；计数仅作为缺失下界，实取小于计数仍标不完整，多于计数不再误报。分页、内容截断、前后 modifiedTime 和部门一致性检查保留。原始第三方数据不修改。
+
+## 合并旧工单（2026-11-05）
+
+Fetch 对明确 isDeleted 或业务 GET 404/410 额外读取同 ID 的 `/tickets/{id}/History?from=0&limit=50`，只查看最新 50 个历史事件，不扫描部门或追踪新 ID。按返回的倒序找到最近的生命周期事件：TicketMergedChild 返回 ErrMerged，TicketDeleted 返回 ErrDeleted；先遇到 TicketRestored/TicketCreated 则不使用更旧事件。TicketMergedMaster 不是旧子工单失效证据。无证据、解析失败、历史 403/404 等保留原错误或明确删除判定；历史 429/取消传递，不吞掉退避。403 本身不触发历史查询。此处不使用消息分页函数，因为历史没有消息 ID/sortBy 契约。
+
+依据：OAS TicketHistory.json 的 eventName 包含 TicketMergedChild；[官方 History 接口](https://help.zoho.com/portal/en/kb/desk/developer-space/rest-apis/articles/get-ticket-history-api-explained-in-detail) 明确大小写路径、倒序及 from/limit，官方示例未给出可靠的子工单目标 ID 映射，因此不猜合并目标。真实定向复核的两张旧样本仍是 isDeleted=true、History 404，只能标明确删除，不能宣称已实测合并历史或目标跳转。
+
+Changed 的元数据复核先执行 checkTicket：明确删除即使 modifiedTime 在回查窗之外也进入 Fetch，避免永久漏掉失效状态。测试先在旧实现观察到合并继续报 404、删除被时间窗漏掉，再通过。没有新增配置或数据库结构。

@@ -1,5 +1,5 @@
 <!-- input: Bub 结果、当前消息、操作反馈和重新总结回调。 -->
-<!-- output: 三段总结、未知作者原文标记、引用定位及返回总结入口。 -->
+<!-- output: 整单三段综合总结、未知作者原文标记、引用定位及返回总结入口。 -->
 <!-- pos: 工单详情中的 Bub 总结展示与证据定位。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -49,7 +49,7 @@
 
 <section aria-labelledby="bub-title" class="space-y-5 border-t pt-6" aria-busy={loading}>
   <header class="flex flex-wrap items-center gap-3">
-    <h2 id="bub-title" tabindex="-1" class="text-lg font-semibold">Bub 沟通总结</h2>
+    <h2 id="bub-title" tabindex="-1" class="text-lg font-semibold">Bub 工单汇总</h2>
     {#if failed}<Badge variant="destructive">{view?.current?.status === "invalid" ? "无法总结" : "最近总结失败"}</Badge>
     {:else if view?.current?.status === "running"}<Badge variant="secondary">总结中</Badge>
     {:else if view?.success}<Badge variant="secondary">已有总结</Badge>

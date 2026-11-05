@@ -1,5 +1,5 @@
 // input: 完整脱敏会话及可选 Jev 参考、显式配置、固定 Python 环境和代理白名单。
-// output: 三类事实和未知作者入站原文摘录的校验与模型标识，或安全错误。
+// output: 整单三类汇总和未知作者入站原文摘录的校验与模型标识，或安全错误。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -17,7 +17,7 @@ import (
 	"zoho-workstation/internal/config"
 )
 
-const BubSchema = "bub-summary-v4"
+const BubSchema = "bub-summary-v5"
 
 type fact struct {
 	Text       string   `json:"text"`
@@ -63,7 +63,7 @@ func ValidateBub(result, input json.RawMessage) error {
 		return errors.New("Bub summary contains extra output")
 	}
 	for section, items := range [][]fact{output.DeviceInfo, output.CustomerFeedback, output.SupportResponses} {
-		if len(items) > 10 {
+		if len(items) > 10 || (section > 0 && len(items) > 1) {
 			return errors.New("Bub summary exceeds section limit")
 		}
 		for _, item := range items {

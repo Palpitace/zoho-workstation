@@ -9,3 +9,5 @@
 | AGENTS.md | 文档索引 | 来源及边界 |
 | zoho-oas | 第三方 Submodule | Zoho 官方 OAS，豁免自有文件头和目录文档 |
 | compatibility.md | 实现依据 | 固定版本、Skills、API/代理/并发同步与单封来信、请求计数及 Bub Schema 兼容性及 Windows/WSL/容器访问 |
+
+compatibility.md 追加合并旧工单的只读历史依据/实测限制、背景色及 Bub v5 整单汇总部署兼容说明。

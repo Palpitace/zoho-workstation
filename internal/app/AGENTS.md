@@ -19,7 +19,7 @@ Start 必须在 HTTP 监听成功后调用，先持有同库 sync/analysis 进�
 
 同工单自动流程先尝试 Jev，首次尝试终结即尝试启动 Bub；成功时附带当前会话版本的评估作补充参考，关闭/失败/超时则使用完整会话独立总结。等待有 90 秒调用上限，不阻塞其他工单、同步或查看。匹配历史中已有终结尝试时，Jev 重试不能再次阻挡 Bub；状态从现有结果计算，无新任务表。手动 Bub 只使用已有参考，不隐式调用 Jev；手动 Jev 不立即追加 Bub 计费请求，自动周期会处理参考变化造成的过期。
 
-CLI、自动调用及 HTTP 状态共用 requestForRecord，避免调用和过期判断使用不同 Hash。Jev 使用完整会话 Hash；Bub v4 保留完整会话并添加 conversation_hash、可空 jev_reference，实际输入包含来源运行 ID/版本/模型和评估标签，按内容 Hash 私有保存。只附同版本的成功结果，未知/失败/过期结果不伪装成当前评估。
+CLI、自动调用及 HTTP 状态共用 requestForRecord，避免调用和过期判断使用不同 Hash。Jev 使用完整会话 Hash；Bub v5 保留完整会话并添加 conversation_hash、可空 jev_reference，实际输入包含来源运行 ID/版本/模型和评估标签，按内容 Hash 私有保存。只附同版本的成功结果，未知/失败/过期结果不伪装成当前评估。
 
 开发自动分析仅 manifest 中 development ID，首次至少保存 20 张时自动建立 17/3 开发与留出集合；已有集合不扩展。所有 50 张以内的工单仍展示，可手动分析。调用输入按 Hash 在 data/review 私有保存；本地输入校验失败记录 invalid、不计入请求次数。Python 环境缺失返回 503 并显示运行错误，不将输入永久标为 invalid；环境修复后可自动恢复。累计请求额度已关闭，自动任务不因历史调用数停止，不重置或自动切换统计轮次。
 
@@ -30,6 +30,6 @@ CLI prepare 同样持有 analysis 锁，服务内部初始化已持锁且加进�
 
 GET /api/status 的 budget 保留 total/round 统计字段，移除 total_limit/round_limit；不再返回 budget_exhausted 或本地额度 HTTP 429。recordViews 不查询额度，Jev 首次尝试等待只根据已有运行状态判断。真实上游限流、模型开关、超时、有限重试和同输入互斥仍有效。
 
-BubSchema 已升级为 bub-summary-v4，既有 v1/v2/v3 成功结果按版本标为过期，仍保留历史；新自动/手动运行使用新结构，不把旧结果静默改写成新分类，不触发 Jev 无谓重跑。前端隐藏模型来源不影响数据库元信息与输入版本追踪。
+BubSchema 已升级为 bub-summary-v5，既有 v1/v2/v3/v4 成功结果按版本标为过期，仍保留历史；新自动/手动运行使用新结构，不把旧结果静默改写成新分类，不触发 Jev 无谓重跑。前端隐藏模型来源不影响数据库元信息与输入版本追踪。
 
 状态 API runtime 返回 sync_batch_size/sync_concurrency；配置缺省为 9/3，上限 50/5，运行状态页展示实际值。同步批次互斥、AI 并发与固定样本集合不变。Bub v4 保留三段 JSON 形状，新增未知作者入站原文摘录约束；旧 v3 可继续展示但标记过期，v1/v2 保留旧结构提示。

@@ -1,5 +1,5 @@
 <!-- input: Go 工单记录及附带 AI 状态、查询条件和查询回调。 -->
-<!-- output: 可搜索筛选的列表、Jev 建议及同步失败/停止和分析状态。 -->
+<!-- output: 默认有效工单及可选历史列表、Jev 建议及同步失败/停止和分析状态。 -->
 <!-- pos: 工单列表页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Search } from "@lucide/svelte";
@@ -14,6 +14,8 @@
     records: TicketRecord[]; loading: boolean; error: string; query?: string;
     statusFilter?: string; statusOptions: string[]; onSearch: () => void;
   } = $props();
+  let showHistory = $state(false);
+  const visibleRecords = $derived(records.filter((record) => showHistory || !record.sync_stopped));
 </script>
 
 <section aria-labelledby="page-title" class="space-y-6">
@@ -37,8 +39,13 @@
     <Button type="submit" disabled={loading} class="h-10"><Search size={16} aria-hidden="true" />查询</Button>
   </form>
 
+  <label class="flex items-center gap-2 text-sm text-muted-foreground">
+    <input type="checkbox" bind:checked={showHistory} class="size-4 accent-primary" />
+    显示已合并、删除或移出部门的历史工单
+  </label>
+
   <div aria-live="polite" class="text-sm text-muted-foreground">
-    {loading ? "正在读取工单…" : `当前显示 ${records.length} 张工单`}
+    {loading ? "正在读取工单…" : `当前显示 ${visibleRecords.length} 张工单`}
   </div>
   {#if error}
     <p role="alert" class="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>
@@ -58,7 +65,7 @@
         </Table.Row>
       </Table.Header>
       <Table.Body>
-        {#each records as record (record.id)}
+        {#each visibleRecords as record (record.id)}
           <Table.Row>
             <Table.Cell class="max-w-xl py-4 pl-5 whitespace-normal">
               <a href={`#/tickets/${encodeURIComponent(record.id)}`} class="inline-block rounded-sm font-medium leading-relaxed break-words underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -79,7 +86,7 @@
           </Table.Row>
         {:else}
           <Table.Row><Table.Cell colspan={7} class="h-36 text-center text-muted-foreground">
-            {loading ? "正在加载…" : error ? "暂无可显示数据。" : query || statusFilter ? "没有符合条件的工单，请调整搜索或状态。" : "尚未同步工单。同步完成后会显示在这里。"}
+            {loading ? "正在加载…" : error ? "暂无可显示数据。" : query || statusFilter ? "没有符合条件的工单，请调整搜索或状态。" : records.length ? "当前没有有效工单，可勾选查看历史工单。" : "尚未同步工单。同步完成后会显示在这里。"}
           </Table.Cell></Table.Row>
         {/each}
       </Table.Body>

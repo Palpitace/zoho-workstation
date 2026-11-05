@@ -1,5 +1,5 @@
 # input: 合成会话、可选 Jev 参考、结构化模型结果和 SDK 模拟网络错误。
-# output: v4 单封来信/逐字摘录及可空分类、来源引用、完整会话及安全网络诊断的合成证据。
+# output: v5 整单汇总、单封来信/逐字摘录及可空分类、来源引用、完整会话及安全网络诊断的合成证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -47,7 +47,7 @@ class SummaryContractTest(unittest.TestCase):
             "input": {"conversation_hash": "synthetic", "jev_reference": None,
                       "messages": [{"id": "m1", "role": "customer", "body": "Help"}]},
             "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-            "schema_version": "bub-summary-v4",
+            "schema_version": "bub-summary-v5",
         }).encode()
         original = main.republic.get_model
         for error, expected in (
@@ -123,6 +123,11 @@ class SummaryContractTest(unittest.TestCase):
             with self.subTest(field=field, refs=refs), self.assertRaises(ValidationError) as caught:
                 validate_summary(json.dumps(invalid), snapshot)
             self.assertEqual(validation_diagnostics(caught.exception)[0]["code"], expected)
+        for section in ("customer_feedback", "support_responses"):
+            fragmented = copy.deepcopy(summary)
+            fragmented[section] *= 2
+            with self.subTest(fragmented=section), self.assertRaises(ValidationError):
+                validate_summary(json.dumps(fragmented), snapshot)
         invalid = {**empty, "device_info": [{"text": "invented printer", "message_ids": []}]}
         with self.assertRaises(ValidationError):
             validate_summary(json.dumps(invalid), snapshot)
@@ -173,7 +178,7 @@ class SummaryContractTest(unittest.TestCase):
                             "messages": [{"id": "m1", "role": "customer", "body": "Help"}],
                         },
                         "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-                        "schema_version": "bub-summary-v4",
+                        "schema_version": "bub-summary-v5",
                     })
                     with patch.object(main.republic, "get_model", side_effect=configured):
                         result = await main.summarize(request)
@@ -203,12 +208,14 @@ class SummaryContractTest(unittest.TestCase):
             "messages": [
                 {"id": "m1", "role": "agent", "body": "请尝试升级固件。", "visibility": "public"},
                 {"id": "m2", "role": "customer", "body": "尚未升级；仍然无法打印。", "visibility": "public"},
+                {"id": "m3", "role": "agent", "body": "请升级后再试，若仍失败请提供视频。", "visibility": "public"},
+                {"id": "m4", "role": "customer", "body": "现在已经升级，仍无法打印；还没有录视频。", "visibility": "public"},
             ],
         }
         summary = {
             "device_info": [],
-            "customer_feedback": [{"text": "客户尚未升级，仍然无法打印。", "message_ids": ["m2"]}],
-            "support_responses": [{"text": "客服建议尝试升级固件。", "message_ids": ["m1"]}],
+            "customer_feedback": [{"text": "客户先前尚未升级，随后确认升级仍无法打印，尚未提供视频。", "message_ids": ["m2", "m4"]}],
+            "support_responses": [{"text": "客服建议升级后重试，并在失败时提供视频。", "message_ids": ["m1", "m3"]}],
         }
 
         async def verify():
@@ -220,7 +227,7 @@ class SummaryContractTest(unittest.TestCase):
             ):
                 sent = []
                 output = copy.deepcopy(summary)
-                output["customer_feedback"][0]["message_ids"] = [cited_id]
+                output["customer_feedback"][0]["message_ids"] = [cited_id, "m4"]
 
                 def respond(request):
                     sent.append(json.loads(request.content))
@@ -237,7 +244,7 @@ class SummaryContractTest(unittest.TestCase):
                 request = main.Request.model_validate({
                     "input": source,
                     "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-key", "model": "deepseek:synthetic"},
-                    "schema_version": "bub-summary-v4",
+                    "schema_version": "bub-summary-v5",
                 })
                 async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond), trust_env=False) as client:
                     def configured(*args, **kwargs):
@@ -249,11 +256,15 @@ class SummaryContractTest(unittest.TestCase):
                     self.assertEqual(len(sent), 1)
                     self.assertFalse(sent[0].get("tools"))
                     messages = sent[0]["messages"]
+                    system_inputs = [message["content"] for message in messages if message["role"] == "system"]
+                    self.assertEqual(system_inputs, [main.SYSTEM_PROMPT])
                     user_inputs = [json.loads(message["content"]) for message in messages if message["role"] == "user"]
                     self.assertEqual(user_inputs, [source])
                     self.assertEqual(result["ok"], cited_id == "m2")
                     if cited_id == "m2":
-                        self.assertEqual(result["result"]["customer_feedback"][0]["message_ids"], ["m2"])
+                        self.assertEqual(result["result"]["customer_feedback"][0]["message_ids"], ["m2", "m4"])
+                        self.assertEqual(len(result["result"]["customer_feedback"]), 1)
+                        self.assertEqual(result["result"]["support_responses"][0]["message_ids"], ["m1", "m3"])
                     else:
                         self.assertEqual(result["diagnostics"][0]["code"], "unknown_reference")
 

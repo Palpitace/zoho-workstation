@@ -1,5 +1,5 @@
 # input: stdin 中完整脱敏会话、可选 Jev 参考、最小模型配置、Schema 和允许的代理环境。
-# output: 三类事实及未知作者入站原文摘录、引用或安全诊断，不推断作者身份。
+# output: 整单综合归纳的三类事实及原文引用或安全诊断，不推断作者身份。
 # pos: Go 到无工具 Bub Core 的固定进程入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -167,7 +167,7 @@ class Snapshot(BaseModel):
 class Request(StrictModel):
     input: Snapshot
     config: ModelConfig
-    schema_version: Literal["bub-summary-v4"]
+    schema_version: Literal["bub-summary-v5"]
 
 
 class Fact(StrictModel):
@@ -177,8 +177,8 @@ class Fact(StrictModel):
 
 class Summary(StrictModel):
     device_info: list[Fact] = Field(max_length=10)
-    customer_feedback: list[Fact] = Field(max_length=10)
-    support_responses: list[Fact] = Field(max_length=10)
+    customer_feedback: list[Fact] = Field(max_length=1)
+    support_responses: list[Fact] = Field(max_length=1)
 
     @model_validator(mode="after")
     def check_evidence(self, info: ValidationInfo) -> Self:
@@ -226,7 +226,13 @@ SYSTEM_PROMPT = """你是只做工单往来事实总结的 Bub。只输出一个
 input.jev_reference 是可选的独立模型评估参考，不是工单事实，也不是消息；其中 choices 不是已经验证的结论。
 参考只辅助理解，不能替代完整会话；与原文矛盾、缺乏证据或归属不明时以原文为准。不重新执行 Jev 评估。
 参考为 null 时独立总结。message_ids 只能来自 input.messages.id，不能引用参考的 run_id、conversation_hash、字段名或标签值。
-只按以下三类总结，各类最多十个简短事实；有明确内容才写，没有就输出空数组，不写“未提供”“无信息”等占位语。
+总结单位是整张工单，不是单条线程或单封消息。先通读全部会话，再按问题主题和处理进展综合归纳。
+不要按消息顺序逐条转述，不输出“第一封/第二封/线程一”等流水账；合并重复反馈和重复排查，保留最新状态、关键转折、失败结果及未解决问题。
+customer_feedback 和 support_responses 各只能输出零或一个对象：把整张工单的同类内容写进同一 text，再把依据的多条消息 ID 合并到该对象的 message_ids。禁止为每条消息各建一个对象。
+text 是连贯的综合摘要，可分短段表达不同问题，但不能拼接逐条消息摘要。不要为了简短丢失不同问题、矛盾、否定或失败措施。
+客户反馈应交代主要问题、发生条件、已确认的尝试结果和目前情况；客服回复应归纳整体处理思路、给过的排查及后续跟进，不逐封复述问候或重复要求。
+最新明确陈述可更新旧状态；相互矛盾且无法确认时保留分歧，不擅自认定解决。没有执行确认的建议始终只是建议。
+只按以下三类总结，设备信息最多十项，客户反馈和客服回复各最多一份综合摘要；有明确内容才写，没有就输出空数组，不写“未提供”“无信息”等占位语。
 1. device_info：明确的客户设备型号、版本、连接方式等信息。不可从问题症状、产品类别或 Jev 评估推断设备参数。
 2. customer_feedback：客户实际反馈的问题、发生条件、否定信息、明确诉求及客户报告的操作和实际结果，按进展合并重复信息。
 3. support_responses：客服已经回复的内容或已经给予的排查建议。只总结已有回复，不新增模型下一步建议。
@@ -234,7 +240,7 @@ input.jev_reference 是可选的独立模型评估参考，不是工单事实，
 此时 text 必须逐字等于 product，或逐字摘录 description 中明确设备信息的片段，不能改写、拼接或截去否定/条件从而改变含义。
 客户反馈通常必须有客户发言证据；客服回复必须有客服发言证据。内部备注、草稿、发送失败或等待发送的内容不放入 support_responses，不能当成客户已收到的回复。
 唯一例外：role=unknown、source=thread、direction=in、visibility=public、status=SUCCESS 的消息，可以在 customer_feedback 逐字摘录反馈原文。
-该例外每项只能引用这一条消息，text 必须是 body 中连续的原文片段，不翻译、不改写、不添加“客户说”等前缀，不剪掉否定或条件；选完整的问题描述句，避免摘录联系人或模板签名。
+该例外优先挑选能反映当前问题的关键原文，不逐封摘录；每项只能引用这一条消息，text 必须是 body 中连续的原文片段，不翻译、不改写、不添加“客户说”等前缀，不剪掉否定或条件；选完整的问题描述句，避免摘录联系人或模板签名。
 这只是作者未确认的来信摘录，不把未知角色改成客户。其他 unknown 消息没有这个例外，客服转述也不能伪装成客户来信。
 仅有一封来信也可以输出反馈；没有客服回复就令 support_responses=[]，不编造客服排查或客户执行。
 混合作者转录 mixed_authors=true 中不能把整段归给消息外层 role；只按明确说话者逐句归属，不明确则不写入相应分类。
@@ -243,10 +249,11 @@ input.jev_reference 是可选的独立模型评估参考，不是工单事实，
 否定、条件句、将来计划和归属不明不能写成已经执行。保留关键时间、型号、失败结果和否定事实。
 不编造根因、批量缺陷、历史类似案例或缺失设备信息，不输出模型假设/评估/操作建议。
 没有消息且工单字段也无明确设备信息时，三个数组都为空。消息少不要求强行填满三个分类。
-固定 JSON 结构示例（m1/m2 只是示例，必须替换为输入中的真实消息 ID）：
+综合示例：客户先说打印偏移，后说校准无效并要求换机；客服先建议校准，后来要求提供测试页。应归纳为下面的一份反馈和一份处理，不生成四份消息摘要。
+示例 ID 均需替换为输入中真实且支持相应事实的消息 ID：
 {"device_info":[],
-"customer_feedback":[{"text":"客户尚未升级固件，仍然无法打印。","message_ids":["m2"]}],
-"support_responses":[{"text":"客服建议升级固件。","message_ids":["m1"]}]}
+"customer_feedback":[{"text":"打印偏移经客户校准后仍未解决，客户希望换机。","message_ids":["customer1","customer2"]}],
+"support_responses":[{"text":"客服先建议校准，问题仍在后要求测试页以进一步核查；尚未承诺换机。","message_ids":["agent1","agent2"]}]}
 只能使用上述字段，每条只有 text、message_ids；所有列表均为 JSON 数组，不能使用 null。
 """
 

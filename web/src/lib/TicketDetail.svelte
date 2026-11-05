@@ -1,12 +1,12 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 紧凑详情、明确删除/移出状态、独立引用导航和折叠倒序会话。 -->
+<!-- output: 紧凑详情、明确合并/删除/移出状态及角色背景色、独立引用导航和折叠倒序会话。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
-  import { dateTime, syncLabel, type TicketRecord, type JevView, type BubView, type AIKind, type ActionFeedback } from "./api";
+  import { dateTime, syncLabel, type Message, type TicketRecord, type JevView, type BubView, type AIKind, type ActionFeedback } from "./api";
   import JevAssessment from "./JevAssessment.svelte";
   import BubSummary from "./BubSummary.svelte";
 
@@ -24,7 +24,14 @@
   const roles: Record<string, string> = { customer: "客户", agent: "客服", unknown: "作者未知" };
   const visibility: Record<string, string> = { public: "公开", private: "内部", unknown: "可见性未知" };
   const messageStates: Record<string, string> = { DRAFT: "草稿，未发送", FAILED: "发送失败", PENDING: "等待发送" };
-  const stopReason = $derived(ticket?.sync_error === "ticket confirmed deleted in Zoho" ? "Zoho 已删除此工单" : "已确认移出配置部门");
+  function messageBackground(message: Message): string {
+    if (message.source === "comment" || message.visibility === "private") return "bg-amber-50 dark:bg-amber-950/30";
+    if (message.mixed_authors) return "bg-muted/30";
+    if (message.role === "customer") return "bg-sky-50 dark:bg-sky-950/30";
+    if (message.role === "agent") return "bg-emerald-50 dark:bg-emerald-950/30";
+    return "bg-muted/30";
+  }
+  const stopReason = $derived(ticket?.sync_error === "ticket confirmed merged in Zoho" ? "Zoho 已将此工单合并" : ticket?.sync_error === "ticket confirmed deleted in Zoho" ? "Zoho 已删除此工单" : "已确认移出配置部门");
 </script>
 
 <section class="space-y-6" aria-label="工单详情" aria-busy={loading}>
@@ -94,7 +101,7 @@
       <summary class="cursor-pointer px-5 py-4"><span id="conversation-title" class="font-semibold">沟通记录</span><span class="ml-3 text-sm text-muted-foreground">{newestMessages.length} 条 · 时间倒序</span></summary>
       <div class="divide-y border-t">
         {#each newestMessages as message (`${message.source}:${message.id}`)}
-          <article id={`message-${message.source}-${message.id}`} tabindex="-1" class="scroll-mt-5 p-5 focus:outline-2 focus:outline-ring focus:-outline-offset-2 sm:p-6">
+          <article id={`message-${message.source}-${message.id}`} tabindex="-1" class="{messageBackground(message)} scroll-mt-5 p-5 focus:outline-2 focus:outline-ring focus:-outline-offset-2 sm:p-6">
             <header class="mb-4 flex flex-wrap items-center gap-2 text-xs">
               <span class="text-sm font-semibold">{roles[message.role] || "作者未知"}</span>
               {#if message.source === "comment"}<Badge variant="secondary">{message.visibility === "private" ? "内部备注" : "备注"}</Badge>{/if}
