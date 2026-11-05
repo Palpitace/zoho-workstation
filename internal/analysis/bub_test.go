@@ -49,7 +49,8 @@ func TestBubSubprocessUsesProxyWithoutInheritingCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "python/.venv/bin/python")); err != nil {
+	t.Chdir(root)
+	if _, err := analysis.PythonExecutable(); err != nil {
 		t.Fatalf("Bub integration requires make setup: %v", err)
 	}
 	entry, _ := json.Marshal(filepath.Join(root, "python/main.py"))
@@ -67,7 +68,7 @@ func TestBubSubprocessUsesProxyWithoutInheritingCredentials(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "python/.venv"), "python/.venv"); err != nil {
 		t.Fatal(err)
 	}
-	input := json.RawMessage(`{"conversation_hash":"synthetic","jev_reference":null,"messages":[{"id":"m1","role":"customer","body":"Help"}]}`)
+	input := json.RawMessage(`{"conversation_hash":"synthetic","messages":[{"id":"m1","role":"customer","body":"Help"}]}`)
 
 	var connects atomic.Int32
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

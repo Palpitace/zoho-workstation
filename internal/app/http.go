@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 工单号/链接、组合筛选、问题分类和实际输入版本分析状态、同步并发配置、调用计数和受保护操作。
+// output: 工单号/链接、组合筛选、问题分类和实际输入版本与等待总结状态、同步并发配置、调用计数和受保护操作。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -53,6 +53,11 @@ func displayTicket(record store.Record, ai map[string]AIStatus) ticketView {
 	return view
 }
 
+type analysisView struct {
+	store.AnalysisView
+	WaitingFor string `json:"waiting_for,omitempty"`
+}
+
 type counts struct {
 	Pending int `json:"pending"`
 	Running int `json:"running"`
@@ -61,15 +66,17 @@ type counts struct {
 	Stale   int `json:"stale"`
 }
 
-func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]AIStatus, map[string]store.AnalysisView, error) {
+func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]AIStatus, map[string]analysisView, error) {
 	summaries := map[string]AIStatus{}
-	views := map[string]store.AnalysisView{}
+	views := map[string]analysisView{}
 	for _, kind := range []string{"jev", "bub"} {
 		model, schema, _ := a.model(kind)
+		waiting := false
 		req := store.AnalysisRequest{TicketID: record.ID, Kind: kind, SchemaVersion: schema, RequestedModel: model.Name, Round: DevelopmentRound}
 		if !record.Pending {
 			prepared, _, err := requestForRecord(ctx, a.db, a.cfg, record, kind, DevelopmentRound)
-			if err != nil && prepared.InputHash == "" {
+			waiting = errors.Is(err, errAwaitingBub)
+			if err != nil && !waiting && prepared.InputHash == "" {
 				return nil, nil, err
 			}
 			req = prepared
@@ -78,7 +85,10 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 		if err != nil {
 			return nil, nil, err
 		}
-		views[kind] = view
+		views[kind] = analysisView{AnalysisView: view}
+		if waiting {
+			views[kind] = analysisView{AnalysisView: view, WaitingFor: "bub"}
+		}
 		s := AIStatus{Status: "pending", Stale: view.Stale, AutomaticEligible: automaticallyEligible(record)}
 		if view.Current != nil {
 			s.Status = view.Current.Status
@@ -86,6 +96,9 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 			if s.Status == "invalid" {
 				s.Status = "failed"
 			}
+		}
+		if waiting {
+			s.Status = "waiting"
 		}
 		if !model.Enabled {
 			s.Status = "disabled"
@@ -287,7 +300,7 @@ func (a *App) status(c *gin.Context) {
 				n.Failed++
 			case "running":
 				n.Running++
-			case "pending":
+			case "pending", "waiting":
 				n.Pending++
 			}
 			if s.Stale {
@@ -306,6 +319,8 @@ func operationResponse(c *gin.Context, err error) {
 	switch {
 	case err == nil:
 		c.JSON(202, gin.H{"status": "accepted"})
+	case errors.Is(err, errAwaitingBub):
+		apiError(c, 409, err.Error())
 	case errors.Is(err, store.ErrBusy):
 		apiError(c, 409, "operation already running")
 	case errors.Is(err, errPythonUnavailable):

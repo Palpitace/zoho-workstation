@@ -1,5 +1,5 @@
-# input: 合成会话、可选 Jev 参考、结构化模型结果和 SDK 模拟网络错误。
-# output: v5 整单汇总、单封来信/逐字摘录及可空分类、来源引用、完整会话及安全网络诊断的合成证据。
+# input: 合成完整会话、结构化模型结果和 SDK 模拟网络错误。
+# output: v6 整单汇总、单封来信/逐字摘录及可空分类、来源引用、完整会话及安全网络诊断的合成证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -28,7 +28,7 @@ class SummaryContractTest(unittest.TestCase):
             ("unknown", "in", "public", "DRAFT", "Labels overlap", False),
         ):
             snapshot = Snapshot.model_validate({
-                "conversation_hash": "synthetic", "jev_reference": None,
+                "conversation_hash": "synthetic",
                 "messages": [{"id": "m1", "source": "thread", "role": role,
                               "direction": direction, "visibility": visibility, "status": status,
                               "body": "Feedback: Labels overlap\nDevice: synthetic"}],
@@ -44,10 +44,10 @@ class SummaryContractTest(unittest.TestCase):
 
     def test_request_failures_have_safe_distinct_codes(self):
         payload = json.dumps({
-            "input": {"conversation_hash": "synthetic", "jev_reference": None,
+            "input": {"conversation_hash": "synthetic",
                       "messages": [{"id": "m1", "role": "customer", "body": "Help"}]},
             "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-            "schema_version": "bub-summary-v5",
+            "schema_version": "bub-summary-v6",
         }).encode()
         original = main.republic.get_model
         for error, expected in (
@@ -87,7 +87,7 @@ class SummaryContractTest(unittest.TestCase):
 
     def test_optional_sections_keep_role_evidence(self):
         snapshot = Snapshot.model_validate({
-            "conversation_hash": "synthetic-conversation", "jev_reference": None,
+            "conversation_hash": "synthetic-conversation",
             "product": "Printer P1", "description": "型号：P1；客户无法打印。",
             "messages": [
                 {"id": "m1", "role": "agent", "body": "请尝试升级固件。", "visibility": "public"},
@@ -174,11 +174,11 @@ class SummaryContractTest(unittest.TestCase):
 
                     request = main.Request.model_validate({
                         "input": {
-                            "conversation_hash": "synthetic-conversation", "jev_reference": None,
+                            "conversation_hash": "synthetic-conversation",
                             "messages": [{"id": "m1", "role": "customer", "body": "Help"}],
                         },
                         "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-                        "schema_version": "bub-summary-v5",
+                        "schema_version": "bub-summary-v6",
                     })
                     with patch.object(main.republic, "get_model", side_effect=configured):
                         result = await main.summarize(request)
@@ -194,13 +194,7 @@ class SummaryContractTest(unittest.TestCase):
 
         asyncio.run(verify())
 
-    def test_optional_reference_keeps_complete_conversation_and_message_evidence(self):
-        reference = {
-            "kind": "model_assessment", "run_id": 42,
-            "conversation_hash": "synthetic-conversation",
-            "schema_version": "jev-v1", "requested_model": "synthetic-jev",
-            "returned_model": "synthetic-jev-version", "choices": {"priority": "high"},
-        }
+    def test_complete_conversation_and_message_evidence(self):
         snapshot = {
             "conversation_hash": "synthetic-conversation", "subject": "无法打印",
             "description": "设备无法打印；以下保留完整往来。", "product": "synthetic-printer",
@@ -220,11 +214,7 @@ class SummaryContractTest(unittest.TestCase):
 
         async def verify():
             original = main.republic.get_model
-            for name, optional_reference, cited_id in (
-                ("without reference", None, "m2"),
-                ("with reference", reference, "m2"),
-                ("reference run is not message evidence", reference, "42"),
-            ):
+            for name, cited_id in (("valid evidence", "m2"), ("unknown evidence", "42")):
                 sent = []
                 output = copy.deepcopy(summary)
                 output["customer_feedback"][0]["message_ids"] = [cited_id, "m4"]
@@ -240,11 +230,11 @@ class SummaryContractTest(unittest.TestCase):
                         text="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
                     )
 
-                source = {**snapshot, "jev_reference": optional_reference}
+                source = snapshot
                 request = main.Request.model_validate({
                     "input": source,
                     "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-key", "model": "deepseek:synthetic"},
-                    "schema_version": "bub-summary-v5",
+                    "schema_version": "bub-summary-v6",
                 })
                 async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond), trust_env=False) as client:
                     def configured(*args, **kwargs):
@@ -270,22 +260,8 @@ class SummaryContractTest(unittest.TestCase):
 
         asyncio.run(verify())
 
-        valid_source = {**snapshot, "jev_reference": reference}
-        cases = (
-            ("missing explicit reference", snapshot),
-            ("missing conversation version", {key: value for key, value in valid_source.items() if key != "conversation_hash"}),
-            ("different conversation", {**snapshot, "jev_reference": {**reference, "conversation_hash": "older-conversation"}}),
-            ("free text is not a reference field", {**snapshot, "jev_reference": {**reference, "synthetic-private-field": "synthetic-private-text"}}),
-            ("probabilities are not choices", {**snapshot, "jev_reference": {**reference, "choices": {"priority": {"high": 0.9}}}}),
-        )
-        for name, invalid_source in cases:
-            with self.subTest(case=name):
-                with self.assertRaises(ValidationError) as caught:
-                    Snapshot.model_validate(invalid_source)
-                diagnostics = validation_diagnostics(caught.exception)
-                self.assertNotIn("synthetic-private", json.dumps(diagnostics))
-                if name == "different conversation":
-                    self.assertEqual(diagnostics[0]["code"], "reference_version_mismatch")
+        with self.assertRaises(ValidationError):
+            Snapshot.model_validate({key: value for key, value in snapshot.items() if key != "conversation_hash"})
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 <!-- input: Go 同步进度、自动运行状态、独立 AI 数量及模型调用统计。 -->
-<!-- output: 当前部门、同步批次/并发、任务失败及累计调用状态概览。 -->
+<!-- output: Bub→Jev 流程说明、 当前部门、同步批次/并发、任务失败及累计调用状态概览。 -->
 <!-- pos: 运行状态页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -29,7 +29,7 @@
       {#if status.runtime?.last_error?.sync && status.runtime.last_error.sync !== status.sync.last_error}<p role="alert" class="mt-4 text-sm break-words text-destructive">{status.runtime.last_error.sync}</p>{/if}
     </section>
     {#if status.runtime}
-      <p class="text-sm text-muted-foreground">{status.runtime.automatic ? "自动任务已启用" : "自动任务未启用"}；{status.runtime.ai_scope === "all_synced" ? `自动分析全部已完整同步的有效工单${status.runtime.ai_scope_count === undefined ? "" : `（${status.runtime.ai_scope_count} 张）`}` : "分析范围以当前服务配置为准"}。每张完成后继续处理下一张；已有当前结果会复用，失败最多自动重试一次。</p>
+      <p class="text-sm text-muted-foreground">{status.runtime.automatic ? "自动任务已启用" : "自动任务未启用"}；{status.runtime.ai_scope === "all_synced" ? `自动分析全部已完整同步的有效工单${status.runtime.ai_scope_count === undefined ? "" : `（${status.runtime.ai_scope_count} 张）`}` : "分析范围以当前服务配置为准"}。先由 Bub 总结，再由 Jev 基于当前总结评估；没有可用总结时 Jev 等待。每张完成后继续处理下一张，已有当前结果会复用，失败最多自动重试一次。</p>
     {/if}
     {#if status.runtime?.sync_batch_size && status.runtime?.sync_concurrency}
       <p class="text-sm text-muted-foreground">同步每批最多 {status.runtime.sync_batch_size} 张工单，最多 {status.runtime.sync_concurrency} 张同时读取。</p>

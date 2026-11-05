@@ -1,5 +1,5 @@
 <!-- input: Jev 结果、独立操作反馈和重新评估回调。 -->
-<!-- output: 区分未知/失败/过期的评估及重新评估入口，无结果来源面板或说明注脚。 -->
+<!-- output: 区分等待总结/未知/失败/过期的评估及重新评估入口，无结果来源面板或说明注脚。 -->
 <!-- pos: 工单详情中的 Jev 展示边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -34,7 +34,8 @@
 <section aria-labelledby="jev-title" class="space-y-4 border-t pt-6" aria-busy={loading}>
   <header class="flex flex-wrap items-center gap-3">
     <h2 id="jev-title" class="text-lg font-semibold">Jev 结构化评估</h2>
-    {#if failed}<Badge variant="destructive">{view?.current?.status === "invalid" ? "无法评估" : "最近评估失败"}</Badge>
+    {#if view?.waiting_for === "bub"}<Badge variant="outline">等待总结</Badge>
+    {:else if failed}<Badge variant="destructive">{view?.current?.status === "invalid" ? "无法评估" : "最近评估失败"}</Badge>
     {:else if view?.current?.status === "running"}<Badge variant="secondary">评估中</Badge>
     {:else if view?.success}<Badge variant="secondary">已有评估</Badge>
     {:else if !loading && !error}<Badge variant="outline">待评估</Badge>{/if}

@@ -1,6 +1,6 @@
 // input: 隔离 SQLite、合成 Jev HTTP 服务和仅接收 stdin 的临时 Python 入口。
-// output: 全部有效工单连续分析、三段 Bub 总结等待首次 Jev 结束、完整会话及同版参考/失败空参考的公共边界证据。
-// pos: 分析参考调度集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
+// output: Bub 先总结、Jev 只读当前总结，失败等待、持续处理及缓存复用的公共边界证据。
+// pos: 总结到评估流水线集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
 import (
@@ -12,8 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
-	"sync"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,69 +24,51 @@ import (
 	"zoho-workstation/internal/zoho"
 )
 
-func TestAutomaticBubReceivesCompletedJevReference(t *testing.T) {
-	python, err := exec.LookPath("python3")
+func TestAutomaticJevWaitsForCurrentBubSummary(t *testing.T) {
+	python, err := exec.LookPath("python")
 	if err != nil {
-		t.Fatal("Python toolchain is required for the subprocess contract test")
+		t.Fatal(err)
 	}
 	for _, success := range []bool{true, false} {
-		t.Run(fmt.Sprintf("jev_success=%t", success), func(t *testing.T) {
+		t.Run(fmt.Sprintf("bub_success=%t", success), func(t *testing.T) {
 			t.Chdir(t.TempDir())
 			ctx := context.Background()
-			for _, dir := range []string{"python/.venv/bin", "data/review"} {
-				if err := os.MkdirAll(dir, 0700); err != nil {
-					t.Fatal(err)
-				}
+			if output, err := exec.Command(python, "-m", "venv", "--without-pip", "python/.venv").CombinedOutput(); err != nil {
+				t.Fatalf("isolated Python: %v %s", err, output)
 			}
-			if err := os.Symlink(python, "python/.venv/bin/python"); err != nil {
-				t.Fatal(err)
-			}
-			// This process records its public input and returns a valid synthetic
-			// summary; it neither imports the SDK nor opens the database or network.
-			const entry = `import json, os, sys
+			entry := `import json, os, sys, time
 request = json.load(sys.stdin)
-with open("captured.tmp", "w", encoding="utf-8") as output:
-    json.dump(request, output)
-os.replace("captured.tmp", "captured-" + request["input"]["ticket_id"] + ".json")
-print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result": {
-    "device_info": [],
-    "customer_feedback": [{"text": "Customer has not upgraded. Printer still disconnects.", "message_ids": ["m2"]}],
-    "support_responses": [{"text": "Support suggested upgrading firmware; execution is not confirmed.", "message_ids": ["m1"]}]
-}}))
+with open("captured-" + request["input"]["ticket_id"] + ".json", "w") as f:
+    json.dump(request, f)
+while not os.path.exists("release"):
+    time.sleep(0.01)
+if os.path.exists("fail"):
+    print(json.dumps({"ok": False, "error": "model_upstream_failed"}))
+else:
+    print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result": {
+        "device_info": [],
+        "customer_feedback": [{"text": "Customer has not upgraded; disconnections persist.", "message_ids": ["m2"]}],
+        "support_responses": [{"text": "Support suggested upgrading; execution is unconfirmed.", "message_ids": ["m1"]}]
+    }}))
 `
 			if err := os.WriteFile("python/main.py", []byte(entry), 0600); err != nil {
 				t.Fatal(err)
 			}
 			if !success {
-				if err := os.WriteFile("data/review/manifest.json", []byte(`[{"ticket_id":"1","split":"holdout"}]`), 0600); err != nil {
+				if err := os.WriteFile("fail", nil, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			started, release := make(chan struct{}), make(chan struct{})
-			var releaseOnce sync.Once
-			unblock := func() { releaseOnce.Do(func() { close(release) }) }
-			defer unblock()
-			var jevCalls atomic.Int32
+			var calls atomic.Int32
+			states := make(chan json.RawMessage, 10)
 			external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/oauth/v2/token":
 					fmt.Fprint(w, `{"access_token":"synthetic"}`)
-				case "/api/v1/tickets/1":
-					w.WriteHeader(503) // Preserve the saved conversation during sync.
 				case "/jev":
-					if jevCalls.Add(1) == 1 {
-						close(started)
-						select {
-						case <-release:
-						case <-r.Context().Done():
-							return
-						}
-					}
-					if !success {
-						w.WriteHeader(503)
-						return
-					}
+					calls.Add(1)
 					var request struct {
+						State     json.RawMessage `json:"state"`
 						Questions map[string]struct {
 							Criteria map[string]string `json:"criteria"`
 						} `json:"questions"`
@@ -97,18 +78,19 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 						w.WriteHeader(400)
 						return
 					}
+					states <- request.State
 					answers := map[string]any{}
-					for key, question := range request.Questions {
-						probabilities := map[string]float64{}
-						for choice := range question.Criteria {
-							probabilities[choice] = 0
+					for key, q := range request.Questions {
+						p := map[string]float64{}
+						for choice := range q.Criteria {
+							p[choice] = 0
 						}
-						probabilities["unknown"] = 1
-						answers[key] = map[string]any{"type": "choice", "choice": "unknown", "confidence": 1, "probabilities": probabilities}
+						p["unknown"] = 1
+						answers[key] = map[string]any{"type": "choice", "choice": "unknown", "confidence": 1, "probabilities": p}
 					}
 					json.NewEncoder(w).Encode(map[string]any{"model": "synthetic-jev-actual", "answers": answers, "usage": map[string]int{"input_tokens": 1, "output_tokens": 1}})
 				default:
-					w.WriteHeader(404)
+					w.WriteHeader(503)
 				}
 			}))
 			defer external.Close()
@@ -120,44 +102,22 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 			if err = db.Reserve(ctx, []string{"1", "2", "3", "4"}); err != nil {
 				t.Fatal(err)
 			}
-			snapshot := ticket.Snapshot{ID: "1", DepartmentID: "7", Subject: "Synthetic issue", Complete: true, Messages: []ticket.Message{
-				{ID: "m1", Role: "agent", Body: "Please upgrade firmware."},
-				{ID: "m2", Role: "customer", Body: "I have not upgraded. Printer still disconnects."},
-			}}
-			raw := ticket.RawSnapshot{Ticket: json.RawMessage(`{"id":"1"}`)}
-			if err = db.Save(ctx, raw, snapshot); err != nil {
-				t.Fatal(err)
-			}
-			if success {
-				for _, id := range []string{"2", "3", "4"} {
-					other := snapshot
-					other.ID = id
-					other.Complete = id != "4"
-					if e := db.Save(ctx, raw, other); e != nil {
-						t.Fatal(e)
-					}
-				}
-				if e := db.StopSync(ctx, "3", "ticket confirmed deleted in Zoho"); e != nil {
-					t.Fatal(e)
+			for _, id := range []string{"1", "2", "3", "4"} {
+				snapshot := ticket.Snapshot{ID: id, DepartmentID: "7", Subject: "Synthetic issue", Complete: id != "4", Messages: []ticket.Message{
+					{ID: "m1", Role: "agent", Body: "Please upgrade firmware."},
+					{ID: "m2", Role: "customer", Body: "RAW_ONLY_SENTINEL I have not upgraded. Printer still disconnects."},
+				}}
+				if err = db.Save(ctx, ticket.RawSnapshot{Ticket: json.RawMessage(`{}`)}, snapshot); err != nil {
+					t.Fatal(err)
 				}
 			}
-			conversation, hash, err := analysis.Input(snapshot, raw)
-			if err != nil {
+			if err = db.StopSync(ctx, "3", "ticket confirmed deleted in Zoho"); err != nil {
 				t.Fatal(err)
 			}
 			cfg := config.Config{Environment: "development", Port: "8080", SyncInterval: time.Hour, SyncLookback: time.Hour,
 				Zoho: config.Zoho{BaseURL: external.URL, AccountsURL: external.URL, DepartmentID: "7"},
 				Jev:  config.Model{Enabled: true, Name: "synthetic-jev", Key: "synthetic", URL: external.URL + "/jev"},
 				Bub:  config.Model{Enabled: true, Name: "synthetic:bub", Key: "synthetic", URL: "https://synthetic.invalid"}}
-			if !success {
-				old, begun, e := db.StartAnalysis(ctx, store.AnalysisRequest{TicketID: "1", Kind: "jev", InputHash: "old-conversation", SchemaVersion: analysis.JevSchema, RequestedModel: cfg.Jev.Name, Round: app.DevelopmentRound}, false)
-				if e != nil || !begun {
-					t.Fatalf("seed old result: %v", e)
-				}
-				if e = db.FinishAnalysis(ctx, old.ID, "old-model", json.RawMessage(`{"answers":{"priority":{"choice":"high"}}}`), nil); e != nil {
-					t.Fatal(e)
-				}
-			}
 			service, err := app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
 			if err != nil {
 				t.Fatal(err)
@@ -165,113 +125,210 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 			if err = service.Start(ctx); err != nil {
 				t.Fatal(err)
 			}
-			defer func() {
-				unblock()
-				service.Close()
-			}()
-			select {
-			case <-started:
-			case <-time.After(3 * time.Second):
-				t.Fatal("automatic Jev request did not start")
+			defer service.Close()
+			read := func(id string) map[string]app.AIStatus {
+				req := httptest.NewRequest("GET", "/api/tickets/"+id, nil)
+				req.Host = "localhost:8080"
+				w := httptest.NewRecorder()
+				service.Handler().ServeHTTP(w, req)
+				var got struct {
+					AI map[string]app.AIStatus `json:"ai"`
+				}
+				if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+					t.Fatalf("ticket unavailable: %d", w.Code)
+				}
+				return got.AI
 			}
-			for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); {
+			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+				if calls.Load() > 0 {
+					t.Fatal("Jev called before Bub summary completed")
+				}
 				if _, e := os.Stat("captured-1.json"); e == nil {
-					t.Fatal("Bub started before the first Jev attempt completed")
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
-			unblock()
-			var captured []byte
-			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
-				captured, err = os.ReadFile("captured-1.json")
-				if err == nil {
 					break
 				}
 				time.Sleep(5 * time.Millisecond)
 			}
+			captured, err := os.ReadFile("captured-1.json")
 			if err != nil {
-				t.Fatal("Bub did not run after Jev completed")
+				t.Fatal("Bub did not start independently")
 			}
-			var envelope struct {
-				Input struct {
-					Messages         []ticket.Message       `json:"messages"`
-					ConversationHash string                 `json:"conversation_hash"`
-					JevReference     *analysis.JevReference `json:"jev_reference"`
-				} `json:"input"`
-				Schema string `json:"schema_version"`
+			if !strings.Contains(string(captured), "RAW_ONLY_SENTINEL") {
+				t.Fatal("Bub lost complete conversation")
 			}
-			if err = json.Unmarshal(captured, &envelope); err != nil {
+			if strings.Contains(string(captured), `"jev_reference": {`) {
+				t.Fatal("Bub must not receive Jev assessment")
+			}
+			if state := read("1"); state["jev"].Status != "waiting" {
+				t.Fatalf("missing waiting state: %+v", state)
+			}
+			if err = os.WriteFile("release", nil, 0600); err != nil {
 				t.Fatal(err)
 			}
-			if envelope.Schema != analysis.BubSchema || envelope.Input.ConversationHash != hash || !reflect.DeepEqual(envelope.Input.Messages, snapshot.Messages) {
-				t.Fatal("Bub did not receive the complete versioned conversation")
-			}
-			jev, err := db.Analysis(ctx, store.AnalysisRequest{TicketID: "1", Kind: "jev", InputHash: hash, SchemaVersion: analysis.JevSchema, RequestedModel: cfg.Jev.Name})
-			if err != nil || jev.Current == nil {
-				t.Fatalf("Jev attempt was not persisted: %v", err)
-			}
-			ref := envelope.Input.JevReference
-			if success {
-				if ref == nil || ref.Kind != "model_assessment" || ref.RunID != jev.Current.ID || ref.ConversationHash != hash || ref.SchemaVersion != analysis.JevSchema || ref.RequestedModel != cfg.Jev.Name || ref.ReturnedModel != "synthetic-jev-actual" || ref.Choices["priority"] != "unknown" {
-					t.Fatal("Bub did not receive the successful same-version Jev reference")
-				}
-			} else if ref != nil || jev.Success == nil || !jev.Stale {
-				t.Fatal("failed current Jev must leave old success stale and pass null reference")
-			}
-			_, bubHash, err := analysis.BubInput(conversation, hash, ref)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var bub store.AnalysisView
-			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
-				bub, err = db.Analysis(ctx, store.AnalysisRequest{TicketID: "1", Kind: "bub", InputHash: bubHash, SchemaVersion: analysis.BubSchema, RequestedModel: cfg.Bub.Name})
-				if err == nil && bub.Success != nil {
+			for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); {
+				s := read("2")
+				if success && s["jev"].Status == "success" && s["bub"].Status == "success" {
 					break
 				}
-				time.Sleep(5 * time.Millisecond)
-			}
-			if err != nil || bub.Success == nil || bub.Stale {
-				t.Fatalf("subprocess result was not saved for its exact input: %+v %v", bub, err)
-			}
-			if success {
-				// With a one-hour Zoho interval, both capabilities must drain the
-				// next complete ticket without waiting for another poll.
-				var state struct {
-					AI map[string]struct {
-						Status   string `json:"status"`
-						Eligible bool   `json:"automatic_eligible"`
-					} `json:"ai"`
-				}
-				read := func(id string) {
-					req := httptest.NewRequest("GET", "/api/tickets/"+id, nil)
-					req.Host = "localhost:8080"
-					w := httptest.NewRecorder()
-					service.Handler().ServeHTTP(w, req)
-					if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &state) != nil {
-						t.Fatal("cannot read ticket state")
+				if !success && s["bub"].Status == "failed" {
+					budget, e := db.AnalysisBudget(ctx, app.DevelopmentRound)
+					if e != nil {
+						t.Fatal(e)
 					}
-				}
-				for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
-					read("2")
-					if state.AI["jev"].Status == "success" && state.AI["bub"].Status == "success" {
+					if budget.Total == 4 && read("2")["bub"].Status == "failed" {
 						break
 					}
-					time.Sleep(10 * time.Millisecond)
 				}
-				if state.AI["jev"].Status != "success" || state.AI["bub"].Status != "success" {
-					t.Fatal("analysis stalled until next sync interval")
+				time.Sleep(10 * time.Millisecond)
+			}
+			if success {
+				for _, id := range []string{"1", "2"} {
+					s := read(id)
+					if s["jev"].Status != "success" || s["bub"].Status != "success" {
+						t.Fatalf("pipeline stalled: %+v", s)
+					}
 				}
-				for _, id := range []string{"3", "4"} {
-					read(id)
-					if state.AI["jev"].Eligible || state.AI["bub"].Eligible {
-						t.Fatal("stopped/incomplete ticket eligible")
+				for i := 0; i < 2; i++ {
+					select {
+					case state := <-states:
+						if strings.Contains(string(state), "RAW_ONLY_SENTINEL") || !strings.Contains(string(state), "Customer has not upgraded; disconnections persist.") {
+							t.Fatal("Jev must receive summary, not raw conversation")
+						}
+					case <-time.After(time.Second):
+						t.Fatal("missing Jev input")
 					}
-					if _, e := os.Stat("captured-" + id + ".json"); !os.IsNotExist(e) {
-						t.Fatal("stopped/incomplete ticket sent to Bub")
-					}
+				}
+			} else {
+				if s := read("2"); s["jev"].Status != "waiting" || s["bub"].Status != "failed" || calls.Load() != 0 {
+					t.Fatalf("failed Bub must not permit Jev: %+v", s)
 				}
 			}
+			for _, id := range []string{"3", "4"} {
+				s := read(id)
+				if s["bub"].AutomaticEligible {
+					t.Fatal("stopped/incomplete eligible")
+				}
+				if _, e := os.Stat("captured-" + id + ".json"); !os.IsNotExist(e) {
+					t.Fatal("stopped/incomplete sent to Bub")
+				}
+			}
+			service.Close()
+			if success {
+				service, err = app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = service.Start(ctx); err != nil {
+					t.Fatal(err)
+				}
+				defer service.Close()
+				time.Sleep(100 * time.Millisecond)
+				if calls.Load() != 2 {
+					t.Fatal("restart repeated successful evaluations")
+				}
 
+				service.Close()
+				// A replacement summary for unchanged conversation invalidates
+				// only the downstream assessment, even if old Jev succeeded.
+				record, e := db.Get(ctx, "1")
+				if e != nil {
+					t.Fatal(e)
+				}
+				seedSummary(t, db, record.Snapshot, record.Raw, cfg.Bub.Name)
+				state := read("1")
+				if !state["jev"].Stale || state["bub"].Stale {
+					t.Fatal("summary replacement did not invalidate only Jev")
+				}
+				service, err = app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = service.Start(ctx); err != nil {
+					t.Fatal(err)
+				}
+				defer service.Close()
+				for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+					if read("1")["jev"].Status == "success" {
+						break
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				if state := read("1"); state["jev"].Status != "success" || state["jev"].Stale || calls.Load() != 3 {
+					t.Fatal("replacement summary was not assessed")
+				}
+				// Repeating identical summary content must not stale current Jev.
+				seedSummary(t, db, record.Snapshot, record.Raw, cfg.Bub.Name)
+				if read("1")["jev"].Stale {
+					t.Fatal("identical summary rerun invalidated Jev")
+				}
+				service.Close()
+				record.Messages[1].Body += " Now I upgraded, but it still fails."
+				if err = db.Save(ctx, record.Raw, record.Snapshot); err != nil {
+					t.Fatal(err)
+				}
+				state = read("1")
+				if state["jev"].Status != "waiting" || !state["jev"].Stale || !state["bub"].Stale {
+					t.Fatal("new conversation reused old summary or assessment")
+				}
+				// Disabled Bub must not cause a hidden raw-conversation fallback.
+				cfg.Bub.Enabled = false
+				service, err = app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = service.Start(ctx); err != nil {
+					t.Fatal(err)
+				}
+				defer service.Close()
+				statusRequest := httptest.NewRequest("GET", "/api/status", nil)
+				statusRequest.Host = "localhost:8080"
+				statusResponse := httptest.NewRecorder()
+				service.Handler().ServeHTTP(statusResponse, statusRequest)
+				var status struct {
+					Token string `json:"csrf_token"`
+				}
+				if statusResponse.Code != 200 || json.Unmarshal(statusResponse.Body.Bytes(), &status) != nil {
+					t.Fatal("status unavailable while waiting")
+				}
+				request := httptest.NewRequest("POST", "/api/tickets/1/analysis/jev", nil)
+				request.Host = "localhost:8080"
+				request.Header.Set("X-CSRF-Token", status.Token)
+				response := httptest.NewRecorder()
+				service.Handler().ServeHTTP(response, request)
+				if response.Code != 409 {
+					t.Fatalf("manual Jev without current summary: %d", response.Code)
+				}
+				time.Sleep(50 * time.Millisecond)
+				if calls.Load() != 3 {
+					t.Fatal("Jev fell back to raw conversation")
+				}
+			}
 		})
 	}
+}
+
+// Seed a current summary through the public store boundary for HTTP fixtures.
+func seedSummary(t *testing.T, db *store.Store, snapshot ticket.Snapshot, raw ticket.RawSnapshot, model string) string {
+	t.Helper()
+	input, conversationHash, err := analysis.Input(snapshot, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, hash, err := analysis.BubInput(input, conversationHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := store.AnalysisRequest{TicketID: snapshot.ID, Kind: "bub", InputHash: hash, SchemaVersion: analysis.BubSchema, RequestedModel: model, Round: app.DevelopmentRound}
+	run, ok, err := db.StartAnalysis(context.Background(), req, true)
+	if err != nil || !ok {
+		t.Fatalf("seed summary: %v", err)
+	}
+	result := json.RawMessage(`{"summary":{"device_info":[],"customer_feedback":[],"support_responses":[]}}`)
+	if err = db.FinishAnalysis(context.Background(), run.ID, model, result, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, jevHash, err := analysis.SummaryInput(snapshot.ID, conversationHash, hash, analysis.BubSchema, model, model, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jevHash
 }

@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 有界并发同步、可取消退避及全部有效工单的独立 Jev/Bub 调度，不按累计次数拦截。
+// output: 有界并发同步、可取消退避及全部有效工单的 Bub→Jev 调度，不按累计次数拦截。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -211,7 +211,7 @@ func (a *App) scheduleAnalysis() {
 		a.setError("analysis", err)
 		return
 	}
-	for _, kind := range []string{"jev", "bub"} {
+	for _, kind := range []string{"bub", "jev"} {
 		model, _, _ := a.model(kind)
 		if !model.Enabled {
 			continue
@@ -242,26 +242,6 @@ func (a *App) RequestAnalysis(id, kind string) error {
 	return err
 }
 
-// Only automatic summaries wait for the first bounded Jev attempt. A failed or
-// unavailable assessment is not a barrier; manual summaries remain independent.
-func (a *App) awaitingJev(id string) (bool, error) {
-	if !a.cfg.Jev.Enabled {
-		return false, nil
-	}
-	req, _, err := analysisRequest(a.ctx, a.db, a.cfg, id, "jev", DevelopmentRound)
-	if err != nil && req.InputHash == "" {
-		return false, err
-	}
-	view, err := a.db.Analysis(a.ctx, req)
-	if err != nil {
-		return false, err
-	}
-	if view.Current != nil {
-		return !view.HasFinishedAttempt, nil
-	}
-	return true, nil
-}
-
 func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	model, _, err := a.model(kind)
 	if err != nil {
@@ -271,7 +251,7 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 		return false, errors.New("analysis capability is disabled")
 	}
 	if kind == "bub" {
-		if _, err := os.Stat("python/.venv/bin/python"); err != nil {
+		if _, err := analysis.PythonExecutable(); err != nil {
 			return false, errPythonUnavailable
 		}
 	}
@@ -283,15 +263,15 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	if a.busy[kind] {
 		return false, store.ErrBusy
 	}
-	if kind == "bub" && !force {
-		waiting, err := a.awaitingJev(id)
-		if err != nil || waiting {
-			return false, err
-		}
-	}
 	req, input, prepareErr := analysisRequest(a.ctx, a.db, a.cfg, id, kind, DevelopmentRound)
 	if prepareErr == nil && kind == "jev" && len(input) > 24*1024 {
-		prepareErr = errors.New("Jev input exceeds 24 KiB; conversation was not truncated")
+		prepareErr = errors.New("Jev summary input exceeds 24 KiB; input was not truncated")
+	}
+	if errors.Is(prepareErr, errAwaitingBub) {
+		if force {
+			return false, prepareErr
+		}
+		return false, nil
 	}
 	if prepareErr != nil {
 		if req.InputHash != "" {
@@ -328,6 +308,12 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 		saveErr := a.db.FinishAnalysis(finishCtx, run.ID, returned, output, callErr)
 		finishCancel()
 		a.finish(kind, errors.Join(callErr, saveErr))
+		if err := errors.Join(callErr, saveErr); err != nil {
+			slog.Warn("analysis failed", "kind", kind, "ticket_id", id, "error", err)
+		} else {
+			slog.Info("analysis completed", "kind", kind, "ticket_id", id)
+		}
+
 		// Wake the coordinator after completion so the next ticket need not
 		// wait for the next Zoho poll. The buffered signal coalesces wakeups.
 		defer func() {
@@ -337,12 +323,6 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 			}
 		}()
 
-		// A first failure still releases Bub immediately, before any Jev retry.
-		if kind == "jev" && !force && a.cfg.Bub.Enabled && a.ctx.Err() == nil {
-			if _, err := a.startAnalysis(id, "bub", false); err != nil && !errors.Is(err, store.ErrBusy) {
-				a.setError("bub", err)
-			}
-		}
 	}()
 	return true, nil
 }

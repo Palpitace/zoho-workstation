@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | AGENTS.md | 目录说明 | API 和页面组件边界 |
 | api.ts | 数据契约 | Go 类型、查询/受保护操作、AI 状态及显示格式 |
-| TicketList.svelte | 列表页面 | 状态/产品/历史筛选、工单号链接、Jev 三列和紧凑 AI 状态 |
+| TicketList.svelte | 列表页面 | 表头状态/产品及历史筛选、工单号链接、Jev 三列和紧凑 AI 状态 |
 | TicketDetail.svelte | 详情页面 | 紧凑工单字段、评估/总结顺序、角色背景色、折叠倒序会话及停止状态 |
 | JevAssessment.svelte | 评估展示 | Jev 枚举、失败/过期状态，无结果来源面板或说明注脚 |
 | BubSummary.svelte | 总结展示 | 三段按需总结、旧版提示、引用定位及浮动返回入口 |
@@ -22,7 +22,7 @@ source=comment 不自动等于内部：结合 visibility 标记备注。mixed_au
 
 Jev 只展示评估枚举，隐藏模型/Schema/输入 Hash 等结果来源，不展示未校准的 confidence/probabilities；缺字段和 unknown 显示未知，no_explicit_clue 不等于低风险。当前情绪 unknown 或缺失时，情绪强度显示“待确认”，避免低强度暗示已知情绪；仅作展示，不改变模型原始结果。
 
-Jev/Bub 分别展示 current、success 和 stale。当前失败保留已有成功结果，旧输入或旧配置结果明确标记过期；无成功结果显示待处理或失败，不生成假数据。Bub v3/v4/v5 仅展示非空 device_info/customer_feedback/support_responses 三段，分别对应客户设备信息、客户反馈总结、客服回复或给予的排查；不输出缺失栏目或旧版强制下一步。旧 v1/v2 成功结果保留在 API/数据库，页面提示重新总结，不把混合旧字段重命名为新分类。
+Jev/Bub 分别展示 current、success 和 stale。当前失败保留已有成功结果，旧输入或旧配置结果明确标记过期；无成功结果显示待处理或失败，不生成假数据。Bub v3/v4/v5/v6 仅展示非空 device_info/customer_feedback/support_responses 三段，分别对应客户设备信息、客户反馈总结、客服回复或给予的排查；不输出缺失栏目或旧版强制下一步。旧 v1/v2 成功结果保留在 API/数据库，页面提示重新总结，不把混合旧字段重命名为新分类。
 
 current.status=invalid 是本地输入无法处理，显示“无法评估/总结”和具体错误，不显示为待处理，也不假称已发模型请求；仍保留已有成功结果。Record.ai.status 已由后端将 invalid 统一为 failed。
 
@@ -47,3 +47,6 @@ Bub 标题为“工单汇总”。v5 的客户反馈/客服处理各是零或一
 Jev 列表拆为情绪、优先级、问题分类，分类复用服务端 category，未知/过期不展示旧分类作当前结论。AI 列每个能力一行，名称固定宽度、一个不换行状态徽标；stale 与 pending/running/failed 合并显示待更新/更新中/更新失败，失败原因或过期解释放 title。两能力保持独立，不强制对齐其业务状态。
 
 状态/产品使用已有原生 select，下拉变化显式更新绑定值后立即查询；缺产品选项发送 __missing__，筛选选项来自接口 filters，轮询不丢筛选。标题仍进本地详情，标题下真实 ticket_number 链接到 web_url，新标签页 noopener/noreferrer；前端再次拒绝非 HTTP(S) 和带凭据 URL。缺工单号显示待同步，不拿内部长 ID 冒充工单号。详情同样使用真实号/链接。运行页说明所有已完整同步有效工单自动处理。
+
+表头筛选：移除顶部独立搜索/筛选栏，状态和产品 select 直接位于对应 th；工单标题的关键词输入仅在“工单”表头展开后显示。复用现有接口与绑定，不新增弹层组件或依赖。
+流水线：Bub 先总结，Jev 后评估。AIStatus.waiting 优先显示“等待总结”；详情 AnalysisView.waiting_for=bub 时显示等待并禁用手动 Jev。旧结果保留并标过期，Bub 失败不阻止查看。运行状态页说明依赖顺序。

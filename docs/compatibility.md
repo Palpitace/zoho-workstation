@@ -94,3 +94,15 @@ Bub v5 保留三数组结构，客户反馈和客服回复各最多一份整单�
 列表新增状态/产品组合下拉和稳定选项，Jev 原有 category 展示为问题分类，与情绪/优先级分列。模型状态及过期标记合并为每能力单个徽标。工单号/跳转字段依据固定 OAS Ticket.json 的 ticketNumber/webUrl，从本地原始证据投影到 API，不猜路径、不改变模型输入；缺数据明确待同步。
 
 按用户指定重新核对 Matt Pocock 当前 README 与 main SHA `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`，本机 tdd/SKILL.md 仍与该提交逐字一致，读取 tests.md/mocking.md 并使用公开接口 RED→GREEN 验证；没有重复安装。测试边界沿用用户既定 App/HTTP/模型外部边界和浏览器主流程要求。
+
+## 表头筛选与 Bub→Jev（2026-11-05）
+
+用户更改分析依赖方向：Bub v6 独立读完整会话，Jev v2 只读当前成功总结。旧 Schema 结果保留并过期；更新后自动先总结再评估，不扩大采样范围。没有当前总结时 Jev 等待，手动评估返回 409；Bub 关闭/失败且没有当前成功总结时不回退原始会话。当前已有成功总结可复用，重复相同总结不因运行 ID 改变而重评。总结有遗漏时 Jev 可返回未知，未声明业务准确率已人工验证。
+
+状态、产品下拉移到表头，标题筛选从工单表头展开。无新依赖、配置或数据库迁移；需要同时更新 Go、Python 入口及前端构建后重启。开发只使用合成 HTTP/Python Mock，不调用真实服务。
+
+## 便携包（2026-11-05）
+
+Windows x64、macOS x64/arm64 原生构建，工具链固定在 .github/workflows/build.yml，Actions 固定到官方发布标签对应提交。Go 原有 x/sys v0.49.0 升为直接依赖以调用 Windows LockFileEx，无版本升级。日志新增官方稳定 lumberjack v2.2.1（排除 v3 alpha），接入原 slog。CPython 3.12.14 由 uv 官方管理发行版提供，uv.lock 依赖安装到随包目录，异地解压验证避免打包不可移动 .venv。
+
+依据：[uv Python 发行版](https://docs.astral.sh/uv/concepts/python-versions/)、[uv CLI](https://docs.astral.sh/uv/reference/cli/)、[GitHub runner 平台](https://github.com/actions/runner-images)、[Lumberjack](https://github.com/natefinch/lumberjack)、[Windows LockFileEx](https://pkg.go.dev/golang.org/x/sys/windows#LockFileEx)。下载说明见 downloads.md。macOS 未签名/公证，Windows 未代码签名；不声称已获得系统信任签名。

@@ -2,6 +2,30 @@
 
 更新日期：2026-11-05。本期交付验收通过，Goal 完成。当前机器运行受控采样版本；不包含未来生产部署、扩大采集或正式模型额度配置。
 
+## Windows/macOS 自动构建与下载版日志（2026-11-05）
+
+- 范围：用户要求规划并完成 Windows/macOS 自动构建、下载后运行与日志，完成后提交远程；本次同时提交前轮表头筛选和 Bub→Jev 改动，不部署生产。
+- 实现：GitHub Actions 在 Windows x64、macOS Intel/Apple Silicon 原生测试、构建、异地解压验收，上传 30 天有效的完整便携包与 SHA256。Actions 固定官方 SHA；Go/pnpm 沿用锁定版本，Node 26.10.0、uv 0.13.7、CPython 3.12.14 固定。产物只含白名单源码资源、Go 可执行文件、独立 Python 及锁定 SDK，不包含用户 .env、data、logs 或不可移动 .venv。
+- 运行：Windows start.cmd 首次创建 .env 模板并打开记事本，填写后再次双击即可启动；Mac start.command 同理。新 check 命令离线验证配置、SQLite/锁、前端和实际 Python SDK 导入。开发仍复用原 .venv；终端用户不需要 Go/Node/Python/WSL/Docker。操作/升级见 docs/downloads.md。
+- 日志：原 slog 同时输出终端和 logs/workstation.log，使用新固定稳定依赖 lumberjack v2.2.1，10 MiB、3 备份、7 天；配置错误、同步批次、模型完成/失败可定位，密钥和正文不进日志。
+- 平台修复：Windows 使用已有 x/sys 的 LockFileEx，Unix 保留 Flock；SQLite URI 处理 Windows 盘符/分隔符。Python 路径统一选择便携 runtime 或平台 .venv，调用/预检复用白名单环境，Windows 只新增必要系统目录变量。
+- TDD：按 Matt Pocock tdd 沿用 Store/CLI/模型子进程边界；先观察 Windows 编译失败于 syscall.Flock，修复后 Windows/macOS 双架构交叉编译通过；启动日志测试先因缺落盘日志失败，再通过安全错误/不泄露配置值断言。Linux 小型 Go 全部测试、go vet、文档结构/差异检查通过；此前表头/Bub→Jev 的前端和浏览器验证保留，原生 CI 会再次构建测试。
+- 消融：未增加安装服务、Updater 或后台平台；打包直接复用锁文件/工具，删除测试中的 Unix 私有锁调用，复用 Store.Lock；不自行实现日志轮转。平台能力仅增加文件锁实现和解释器定位，未引入新数据库或通知模块。
+- 文档同步：根及受影响目录 AGENTS、GOAL、下载与兼容说明已更新。真实 Zoho/模型请求 0，未改用户凭据/数据或重启原服务。
+- 验证阶段：本地完整归档与异地解压检查通过（真实 SDK 导入、Go check、SQLite/锁、安全日志）；Windows/macOS 的实际原生结果以提交对应 GitHub Actions 运行记录为准。完成本地检查后推送并核对首次 CI 与下载产物。
+
+## 表头筛选与 Bub→Jev（2026-11-05）
+
+- 完成：按用户新要求删除顶部独立搜索/筛选栏；状态、产品直接在表头下拉，标题关键词从工单表头展开。沿用已有组合查询、稳定选项和轮询条件，无新 UI 依赖。
+- 完成：Bub v6 先读完整脱敏会话并总结；Jev v2 仅接收当前总结及版本来源元信息，不接收原始会话。不再向 Bub 传 Jev 参考。无当前成功总结时自动等待、手动 Jev 返回 409，列表/详情明确显示等待总结；Bub 失败或关闭不会导致原文回退，不阻塞同步/查看。
+- 版本与恢复：总结内容、会话、Schema/模型变化使旧评估过期；相同总结不因运行 ID 改变而重评。旧结果保留，不做数据库迁移；原有限并发、同输入最多一次自动失败重试及重启复用继续有效。
+- Matt Pocock TDD：复用已核实来源的本地 tdd skill，沿用已确认的 App/HTTP、模型 HTTP/Python Mock 和浏览器边界。新顺序测试先观察旧代码“Jev called before Bub summary completed”失败；修改后覆盖成功/失败、持续处理、停止/不完整排除、重启复用、总结替换、同内容重跑、新会话过期、关闭 Bub 与手动拒绝。旧页面浏览器断言先失败于筛选不在表头，再通过更新后的 DOM 和组合筛选。
+- 验证：make test（Go 全部小型测试、Svelte 0 错误/0 警告、Python 5 项 SDK Mock 测试、文档结构）；go test -race ./internal/app、go vet ./...、Go 构建与 Vite 构建通过。浏览器验证表头下拉/标题展开查询/清空、稳定选项、工单链接、等待状态、详情引用、Jev 禁用及桌面/窄屏布局；截图已查看。浏览器使用合成 SQLite/API，未启动后台模型调度。
+- 消融：实际删除旧 awaitingJev、JevReference 传输/校验及只为旧调度服务的 HasFinishedAttempt 字段与对应断言；相关 Go store/app 与 Python 测试通过。复用完成唤醒和成功结果查询，不增加任务表、第二套调度器或兼容旧调用方向的分支。
+- 文档同步：根/相关目录 AGENTS.md、GOAL.md 与兼容说明已更新。真实模型请求 0，未读取真实工单、修改 .env 或真实数据库，未重启已有服务。
+- 阻塞：无本地实现阻塞；真实新流程的模型语义效果尚未验证，不声称准确率或人工验收。
+- 下一步：已在后续下载版任务中获得提交授权；部署时须同时更新 Go、Python 入口和前端资源并重启，旧版结果会按新版本顺序重新分析。
+
 ## 全部已同步工单自动分析与列表优化（2026-11-05）
 
 - 用户新增六项需求，并确认 Jev 分为情绪、优先级、问题分类三列。本轮在干净 main 上实现；用户随后授权提交至 GitHub main。未部署、未更改 .env、真实工单/应用数据库，未重启已有服务。

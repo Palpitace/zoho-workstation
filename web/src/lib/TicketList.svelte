@@ -1,8 +1,8 @@
 <!-- input: Go 工单记录及附带 AI 状态、查询条件和查询回调。 -->
-<!-- output: 状态/产品筛选、Zoho 工单号链接、三列 Jev 结果及紧凑对齐的 AI 状态。 -->
+<!-- output: 表头状态/产品筛选、Zoho 工单号链接、三列 Jev 结果及紧凑对齐的 AI 状态。 -->
 <!-- pos: 工单列表页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
-  import { Search } from "@lucide/svelte";
+  import { Search, ListFilter } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -24,28 +24,6 @@
     <p class="mt-2 text-sm text-muted-foreground">查看当前部门已选取的工单和沟通记录。</p>
   </div>
 
-  <form class="flex flex-wrap items-end gap-3" onsubmit={(event) => { event.preventDefault(); onSearch(); }}>
-    <div class="min-w-48 flex-1 space-y-2">
-      <label for="ticket-query" class="text-sm font-medium">搜索标题</label>
-      <Input id="ticket-query" class="h-10" placeholder="输入工单标题中的关键词" bind:value={query} />
-    </div>
-    <div class="w-full space-y-2 sm:w-44">
-      <label for="status-filter" class="text-sm font-medium">工单状态</label>
-      <select id="status-filter" bind:value={statusFilter} onchange={(event) => { statusFilter = event.currentTarget.value; onSearch(); }} class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <option value="">全部状态</option>
-        {#each statusOptions as option}<option value={option}>{option}</option>{/each}
-      </select>
-    </div>
-    <div class="w-full space-y-2 sm:w-44">
-      <label for="product-filter" class="text-sm font-medium">产品</label>
-      <select id="product-filter" bind:value={productFilter} onchange={(event) => { productFilter = event.currentTarget.value; onSearch(); }} class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <option value="">全部产品</option>
-        {#each productOptions as option}<option value={option || "__missing__"}>{option || "未提供"}</option>{/each}
-      </select>
-    </div>
-    <Button type="submit" disabled={loading} class="h-10"><Search size={16} aria-hidden="true" />查询</Button>
-  </form>
-
   <label class="flex items-center gap-2 text-sm text-muted-foreground">
     <input type="checkbox" bind:checked={showHistory} class="size-4 accent-primary" />
     显示已合并、删除或移出部门的历史工单
@@ -62,9 +40,27 @@
     <Table.Root>
       <Table.Header>
         <Table.Row>
-          <Table.Head class="min-w-64 pl-5">工单</Table.Head>
-          <Table.Head>状态</Table.Head>
-          <Table.Head class="min-w-32">产品</Table.Head>
+          <Table.Head class="min-w-64 pl-5">
+            <details class="py-2">
+              <summary class="w-fit cursor-pointer list-none rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span class="inline-flex items-center gap-1.5">工单<ListFilter size={14} class={query ? "text-foreground" : "text-muted-foreground"} aria-hidden="true" /></span></summary>
+              <form class="mt-2 flex items-center gap-2" onsubmit={(event) => { event.preventDefault(); onSearch(); }}>
+                <Input id="ticket-query" aria-label="筛选工单标题" class="h-8 min-w-32" placeholder="标题关键词" bind:value={query} />
+                <Button type="submit" size="sm" variant="outline" disabled={loading} aria-label="应用标题筛选"><Search size={14} aria-hidden="true" /></Button>
+              </form>
+            </details>
+          </Table.Head>
+          <Table.Head>
+            <select id="status-filter" aria-label="筛选工单状态" bind:value={statusFilter} onchange={(event) => { statusFilter = event.currentTarget.value; onSearch(); }} class="h-9 max-w-40 cursor-pointer rounded-sm border-0 bg-transparent pr-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <option value="">状态 · 全部</option>
+              {#each statusOptions as option}<option value={option}>{option}</option>{/each}
+            </select>
+          </Table.Head>
+          <Table.Head class="min-w-32">
+            <select id="product-filter" aria-label="筛选产品" bind:value={productFilter} onchange={(event) => { productFilter = event.currentTarget.value; onSearch(); }} class="h-9 max-w-44 cursor-pointer rounded-sm border-0 bg-transparent pr-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <option value="">产品 · 全部</option>
+              {#each productOptions as option}<option value={option || "__missing__"}>{option || "未提供"}</option>{/each}
+            </select>
+          </Table.Head>
           <Table.Head class="min-w-40">更新时间</Table.Head>
           <Table.Head>同步</Table.Head>
           <Table.Head class="min-w-24">情绪</Table.Head>
@@ -106,7 +102,7 @@
           </Table.Row>
         {:else}
           <Table.Row><Table.Cell colspan={9} class="h-36 text-center text-muted-foreground">
-            {loading ? "正在加载…" : error ? "暂无可显示数据。" : query || statusFilter || productFilter ? "没有符合条件的工单，请调整搜索或状态。" : records.length ? "当前没有有效工单，可勾选查看历史工单。" : "尚未同步工单。同步完成后会显示在这里。"}
+            {loading ? "正在加载…" : error ? "暂无可显示数据。" : query || statusFilter || productFilter ? "没有符合条件的工单，请调整表头筛选。" : records.length ? "当前没有有效工单，可勾选查看历史工单。" : "尚未同步工单。同步完成后会显示在这里。"}
           </Table.Cell></Table.Row>
         {/each}
       </Table.Body>

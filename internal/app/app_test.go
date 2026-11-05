@@ -1,4 +1,4 @@
-// input: 隔离 SQLite、合成 Zoho/Jev HTTP 服务及本机 API 请求。
+// input: 隔离 SQLite、合成 Zoho/Jev HTTP 服务及已有 Bub 总结及本机 API 请求。
 // output: 不受研发名单限制的自动失败恢复、独立查看、管理防护及跨重启缓存/计数及超旧额度继续处理的行为证据。
 // pos: 单服务生命周期集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
@@ -90,7 +90,8 @@ func TestAutomaticAnalysisRecoveryAndProtectedOperations(t *testing.T) {
 	}
 	os.MkdirAll("data/review", 0700)
 	os.WriteFile("data/review/manifest.json", []byte(`[{"ticket_id":"1","split":"holdout"}]`), 0600)
-	cfg := config.Config{Environment: "development", Port: "8080", DatabasePath: dbPath, SyncInterval: 30 * time.Millisecond, SyncLookback: time.Hour, Zoho: config.Zoho{BaseURL: external.URL, AccountsURL: external.URL, DepartmentID: "7"}, Jev: config.Model{Enabled: true, Name: "synthetic", Key: "synthetic", URL: external.URL + "/jev"}}
+	cfg := config.Config{Environment: "development", Port: "8080", DatabasePath: dbPath, SyncInterval: 30 * time.Millisecond, SyncLookback: time.Hour, Zoho: config.Zoho{BaseURL: external.URL, AccountsURL: external.URL, DepartmentID: "7"}, Bub: config.Model{Name: "synthetic"}, Jev: config.Model{Enabled: true, Name: "synthetic", Key: "synthetic", URL: external.URL + "/jev"}}
+	seedSummary(t, db, snapshot, ticket.RawSnapshot{Ticket: json.RawMessage(`{"id":"1"}`)}, "synthetic")
 	service, err := app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +126,7 @@ func TestAutomaticAnalysisRecoveryAndProtectedOperations(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if status.AI["jev"].Success != 1 || models.Load() != 2 || syncs.Load() == 0 || status.Budget.Total != 63 {
+	if status.AI["jev"].Success != 1 || models.Load() != 2 || syncs.Load() == 0 || status.Budget.Total != 64 {
 		t.Fatalf("automatic recovery: requests=%d sync=%d budget=%d", models.Load(), syncs.Load(), status.Budget.Total)
 	}
 	var pending struct {

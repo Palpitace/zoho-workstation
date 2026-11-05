@@ -1,5 +1,5 @@
 // input: 已保存工单、根配置和研发轮次/数量限制。
-// output: 脱敏开发副本、带同版本 Jev 参考的 Bub 输入及可追溯结果。
+// output: 脱敏开发副本、Bub 总结到 Jev 评估的版本化输入及可追溯结果。
 // pos: 分析命令编排与本地验证入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -39,39 +39,32 @@ func requestForRecord(ctx context.Context, db *store.Store, cfg config.Config, s
 	if snapshot.Pending {
 		return store.AnalysisRequest{}, nil, sql.ErrNoRows
 	}
-	input, hash, err := analysis.Input(snapshot.Snapshot, snapshot.Raw)
-	model, schema := cfg.Jev.Name, analysis.JevSchema
-	if kind == "bub" {
-		model, schema = cfg.Bub.Name, analysis.BubSchema
-		if err == nil {
-			var reference *analysis.JevReference
-			if cfg.Jev.Enabled {
-				view, e := db.Analysis(ctx, store.AnalysisRequest{TicketID: snapshot.ID, Kind: "jev", InputHash: hash, SchemaVersion: analysis.JevSchema, RequestedModel: cfg.Jev.Name})
-				if e != nil {
-					return store.AnalysisRequest{}, nil, e
-				}
-				if view.Success != nil && !view.Stale {
-					run := view.Success
-					var result struct {
-						Answers map[string]struct {
-							Choice string `json:"choice"`
-						} `json:"answers"`
-					}
-					if json.Unmarshal(run.Result, &result) != nil {
-						return store.AnalysisRequest{}, nil, errors.New("saved Jev assessment is invalid")
-					}
-					choices := map[string]string{}
-					for key, answer := range result.Answers {
-						choices[key] = answer.Choice
-					}
-					reference = &analysis.JevReference{Kind: "model_assessment", RunID: run.ID, ConversationHash: hash, SchemaVersion: run.SchemaVersion, RequestedModel: run.RequestedModel, ReturnedModel: run.ReturnedModel, Choices: choices}
-				}
-			}
-			input, hash, err = analysis.BubInput(input, hash, reference)
-		}
+	input, conversationHash, err := analysis.Input(snapshot.Snapshot, snapshot.Raw)
+	hash := conversationHash
+	if err == nil {
+		input, hash, err = analysis.BubInput(input, conversationHash)
 	}
-	return store.AnalysisRequest{TicketID: snapshot.ID, Kind: kind, InputHash: hash, SchemaVersion: schema, RequestedModel: model, Round: round}, input, err
+	bubReq := store.AnalysisRequest{TicketID: snapshot.ID, Kind: "bub", InputHash: hash, SchemaVersion: analysis.BubSchema, RequestedModel: cfg.Bub.Name, Round: round}
+	if kind == "bub" {
+		return bubReq, input, err
+	}
+	req := store.AnalysisRequest{TicketID: snapshot.ID, Kind: "jev", InputHash: "awaiting-bub:" + hash, SchemaVersion: analysis.JevSchema, RequestedModel: cfg.Jev.Name, Round: round}
+	if err != nil {
+		return req, nil, err
+	}
+	view, err := db.Analysis(ctx, bubReq)
+	if err != nil {
+		return req, nil, err
+	}
+	if view.Success == nil || view.Stale {
+		return req, nil, errAwaitingBub
+	}
+	run := view.Success
+	input, req.InputHash, err = analysis.SummaryInput(snapshot.ID, conversationHash, run.InputHash, run.SchemaVersion, run.RequestedModel, run.ReturnedModel, run.Result)
+	return req, input, err
 }
+
+var errAwaitingBub = errors.New("等待当前会话的 Bub 总结完成后再评估")
 
 func PrepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limit int) error {
 	records, err := db.List(ctx, "", "")
@@ -118,15 +111,19 @@ func PrepareInputs(ctx context.Context, db *store.Store, cfg config.Config, limi
 		if len(manifest) >= limit {
 			break
 		}
-		request, input, e := analysisRequest(ctx, db, cfg, record.ID, "jev", DevelopmentRound)
+		snapshot, e := db.Get(ctx, record.ID)
 		if e != nil {
 			return e
 		}
-		path := filepath.Join(dir, request.InputHash+".json")
-		if e = saveInput(request.InputHash, input); e != nil {
+		input, hash, e := analysis.Input(snapshot.Snapshot, snapshot.Raw)
+		if e != nil {
 			return e
 		}
-		manifest = append(manifest, reviewItem{record.ID, request.InputHash, path, "development"})
+		path := filepath.Join(dir, hash+".json")
+		if e = saveInput(hash, input); e != nil {
+			return e
+		}
+		manifest = append(manifest, reviewItem{record.ID, hash, path, "development"})
 		if len(fixed) > 0 {
 			manifest[len(manifest)-1].Split = fixed[len(manifest)-1].Split
 		}
@@ -168,7 +165,7 @@ func AnalyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, lim
 		return errors.New("requested analysis capability is disabled")
 	}
 	if kind == "bub" {
-		if _, err := os.Stat("python/.venv/bin/python"); err != nil {
+		if _, err := analysis.PythonExecutable(); err != nil {
 			return errors.New("Bub Python environment is not installed")
 		}
 	}
@@ -200,19 +197,20 @@ func AnalyzeTickets(ctx context.Context, db *store.Store, cfg config.Config, lim
 		if err != nil {
 			return err
 		}
-		conversationHash := req.InputHash
-		if kind == "bub" {
-			var source struct {
-				ConversationHash string `json:"conversation_hash"`
-			}
-			json.Unmarshal(input, &source)
-			conversationHash = source.ConversationHash
+		snapshot, err := db.Get(ctx, selected.TicketID)
+		if err != nil {
+			return err
 		}
+		_, conversationHash, err := analysis.Input(snapshot.Snapshot, snapshot.Raw)
+		if err != nil {
+			return err
+		}
+
 		if conversationHash != selected.Hash {
 			return errors.New("review input changed; prepare the local review copy again")
 		}
 		if kind == "jev" && len(input) > 24*1024 {
-			return errors.New("Jev input exceeds conservative 24 KiB limit; no request sent")
+			return errors.New("Jev summary input exceeds conservative 24 KiB limit; no request sent")
 		}
 		if err := saveInput(req.InputHash, input); err != nil {
 			return err

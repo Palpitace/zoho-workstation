@@ -1,5 +1,5 @@
 // input: 根 .env、命令行采样数量及本地 SQLite 数据。
-// output: 受控命令、有界并发采样、显式 IP 监听和自动同步/分析服务。
+// output: 落盘轮转日志、离线检查、受控命令、有界并发采样、显式 IP 监听和自动同步/分析服务。
 // pos: Go 服务启动与生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package main
 
@@ -8,13 +8,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"gopkg.in/natefinch/lumberjack.v2"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
+	"zoho-workstation/internal/analysis"
 
 	"zoho-workstation/internal/app"
 	"zoho-workstation/internal/config"
@@ -23,22 +27,41 @@ import (
 	"zoho-workstation/internal/zoho"
 )
 
-func main() {
-	if err := run(); err != nil {
-		slog.Error("operation failed", "error", err)
-		os.Exit(1)
+func main() { os.Exit(exitCode()) }
+
+func exitCode() int {
+	if err := os.MkdirAll("logs", 0700); err != nil {
+		fmt.Fprintln(os.Stderr, "cannot create logs directory")
+		return 1
 	}
+	// Check write access before configuring slog; logger errors must not be hidden.
+	file, err := os.OpenFile(filepath.Join("logs", "workstation.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot open logs/workstation.log")
+		return 1
+	}
+	file.Close()
+	output := &lumberjack.Logger{Filename: filepath.Join("logs", "workstation.log"), MaxSize: 10, MaxBackups: 3, MaxAge: 7}
+	defer output.Close()
+	level := new(slog.LevelVar)
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, output), &slog.HandlerOptions{Level: level})))
+	if err := run(level); err != nil {
+		slog.Error("operation failed", "error", err)
+		return 1
+	}
+	slog.Info("workstation stopped")
+	return 0
 }
 
-func run() error {
+func run(logLevel *slog.LevelVar) error {
 	command := "serve"
 	args := os.Args[1:]
 	if len(args) > 0 {
 		command = args[0]
 		args = args[1:]
 	}
-	if command != "sample" && command != "serve" && command != "prepare" && command != "analyze" {
-		return errors.New("usage: workstation sample | serve | prepare | analyze")
+	if command != "sample" && command != "serve" && command != "prepare" && command != "analyze" && command != "check" {
+		return errors.New("usage: workstation sample | serve | prepare | analyze | check")
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	size := flags.Int("size", 50, "unique ticket cap for initial sample, 1–50; frozen after selection")
@@ -68,12 +91,35 @@ func run() error {
 	}
 	var level slog.Level
 	level.UnmarshalText([]byte(cfg.LogLevel))
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	logLevel.Set(level)
 	db, err := store.Open(cfg.DatabasePath, cfg.Zoho.DepartmentID)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+	if command == "check" {
+		for _, name := range []string{"sync", "analysis"} {
+			release, err := db.Lock(name)
+			if err != nil {
+				return err
+			}
+			release()
+		}
+		if _, err := os.Stat("web/dist/index.html"); err != nil {
+			return errors.New("frontend build not available")
+		}
+		if cfg.Bub.Enabled {
+			if err := analysis.CheckPython(context.Background()); err != nil {
+				return err
+			}
+			if _, err := os.Stat("python/main.py"); err != nil {
+				return errors.New("Bub entry not available")
+			}
+		}
+		slog.Info("configuration and local runtime verified; no network requests sent")
+		return nil
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if command == "prepare" {

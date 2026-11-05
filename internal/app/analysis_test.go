@@ -5,10 +5,8 @@ package app
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"zoho-workstation/internal/config"
 	"zoho-workstation/internal/store"
@@ -30,21 +28,18 @@ func TestConcurrentAnalysisDoesNotRecoverActiveRequest(t *testing.T) {
 	if _, _, err = db.StartAnalysis(ctx, req, false); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := os.OpenFile(path+".analysis.lock", os.O_CREATE|os.O_RDWR, 0600)
+	release, err := db.Lock("analysis")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatal(err)
-	}
+	defer release()
 	cfg := config.Config{DatabasePath: path, Jev: config.Model{Enabled: true, Name: "synthetic", URL: "https://example.invalid", Key: "synthetic"}}
 	err = AnalyzeTickets(ctx, db, cfg, 1, "jev", DevelopmentRound, false)
 	view, _ := db.Analysis(ctx, req)
 	if err == nil || !strings.Contains(err.Error(), "already running") || view.Current.Status != "running" {
 		t.Fatalf("active request changed: %v status=%s", err, view.Current.Status)
 	}
-	syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	release()
 	_ = AnalyzeTickets(ctx, db, cfg, 1, "jev", DevelopmentRound, false)
 	view, _ = db.Analysis(ctx, req)
 	if view.Current.Status != "failed" {

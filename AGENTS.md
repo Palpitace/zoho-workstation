@@ -14,10 +14,10 @@
 
 - 后端 Go、Gin、net/http、encoding/json、log/slog、database/sql、modernc.org/sqlite、原生 SQL；仅 Go 访问数据库。
 - 前端 Svelte 5、TypeScript、Vite、shadcn-svelte、兼容的 Tailwind，按需 Lucide；生产静态资源由 Go 提供。
-- 列表按情绪、优先级、问题分类分列显示 Jev，支持状态/产品下拉筛选及真实工单号跳转。详情采用紧凑工单信息 → Jev → Bub → 默认折叠的倒序沟通记录；模型结果来源在界面隐藏但继续保存。Bub v5 按整张工单综合归纳，只输出有依据的设备信息、客户反馈、客服回复/排查，客户反馈/客服处理各至多一份摘要、空段不展示；事实引用可展开并定位消息，旧格式结果保留并提示重新总结。未知作者的公开入站 SUCCESS 线程仅允许逐字摘录反馈并标注作者未确认，不据方向推断作者身份。
+- 列表按情绪、优先级、问题分类分列显示 Jev，支持表头状态/产品下拉筛选及真实工单号跳转。详情采用紧凑工单信息 → Jev → Bub → 默认折叠的倒序沟通记录；模型结果来源在界面隐藏但继续保存。Bub v6 按整张工单综合归纳，只输出有依据的设备信息、客户反馈、客服回复/排查，客户反馈/客服处理各至多一份摘要、空段不展示；事实引用可展开并定位消息，旧格式结果保留并提示重新总结。未知作者的公开入站 SUCCESS 线程仅允许逐字摘录反馈并标注作者未确认，不据方向推断作者身份。
 - Bub 使用核实过的稳定 SDK，通过固定 Python 入口及 stdin/stdout JSON 与 Go 交互；stderr 日志、超时、有限并发，不拼接 Shell。
 - 运行需要 Go 服务及随附 Python 环境；Node 仅参与前端开发和构建。
-- Jev 与 Bub 使用同一版本的完整脱敏会话。先尝试 Jev，再向 Bub 附带同版本的可用评估作补充参考；Jev 关闭、失败或超时不阻止 Bub 独立总结。模型评估不是工单事实，不替代消息证据；不传过期评估，Bub 实际输入版本覆盖附带参考。失败不能阻塞同步或查看，旧输入结果不能覆盖新输入结果。
+- Bub v6 先读取完整脱敏会话并总结；Jev v2 只基于当前版本的成功 Bub 总结评估。缺少当前总结时 Jev 等待，不回退原始会话、不使用过期总结。总结及评估均是模型输出，缺失事实保持未知；失败不影响同步和查看，旧输入结果不能覆盖新输入结果。
 - Jev 为 TypeSafe AI（https://typesafe.ai/），Go 直接调用其 HTTP API；Bub 为 https://bub.build/ 的 Python SDK，生成式模型供应商单独配置。
 - 用户选定 Bub 使用 DeepSeek 官方模型服务。BUB_MODEL 采用 Republic 的 provider:model 格式，地址和 Key 显式传入；仅使用无工具的 Core SDK，不加载 App 插件或持久化会话记忆。
 - Jev 按官方 Choice/Score/Noul 能力建模，不要求自由文本生成；客户诉求以明确标签及未知状态评估，具体内容保留原文。
@@ -62,9 +62,9 @@ Zoho 地址使用实际数据中心的 origin，不含 `/api/v1` 或 `/oauth/v2/
 
 从项目根执行：`pnpm --dir web install --frozen-lockfile` 安装前端固定依赖；`make test` 运行 Go 合成测试、前端类型及文档结构检查；`make build` 构建前端静态文件与 Go 程序；`make sample` 固定最多 50 个样本 ID 并补齐本轮最多 3 张；`make run` 构建并启动本机服务。前端开发用 `pnpm --dir web dev` 代理本机 Go API。
 首次可用 `make setup` 依次安装锁定的 Go、pnpm 和 uv 依赖；`make test` 同时执行 Python 合成契约检查。依赖版本只在需要兼容性变化时更新。
-Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`，TCP 监听 IP 可由 APP_LISTEN_HOST 配置。Windows/WSL/容器访问步骤见 docs/compatibility.md。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。服务启动后接续处理固定样本待同步批次（默认每批 9 张、最多 3 张并发读取、正常批次间隔 1 秒、失败退避），处理完后按 SYNC_INTERVAL 常规增量轮询；同步独立冷却失败工单，确认 Zoho 已合并、删除或移出部门则保留历史并停止读取，默认列表隐藏、可勾选查看历史，水位不再等待单票恢复。继续调度 Jev 后的可选参考总结；样本集合冻结后复用，不重建数据库绕过采样上限。
+Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`，TCP 监听 IP 可由 APP_LISTEN_HOST 配置。Windows/WSL/容器访问步骤见 docs/compatibility.md。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。服务启动后接续处理固定样本待同步批次（默认每批 9 张、最多 3 张并发读取、正常批次间隔 1 秒、失败退避），处理完后按 SYNC_INTERVAL 常规增量轮询；同步独立冷却失败工单，确认 Zoho 已合并、删除或移出部门则保留历史并停止读取，默认列表隐藏、可勾选查看历史，水位不再等待单票恢复。继续调度 Bub 总结后的 Jev 评估；样本集合冻结后复用，不重建数据库绕过采样上限。
 页面提供 POST `/api/sync` 与 `/api/tickets/:id/analysis/:kind`，校验本机 Host、允许 Origin 与临时会话令牌。serve 持有同库同步/分析操作锁，运行期间使用页面操作；CLI sample/analyze 会拒绝并发写者。后台自动分析覆盖所有已完整同步且未停止的工单，研发/留出清单不限制业务调度；完成后立即接续下一张，累计请求次数仅作统计，不阻止模型处理。SYNC_BATCH_SIZE（默认 9，1..50）与 SYNC_CONCURRENCY（默认 3，1..5）分别控制批次和并发，修改后重启生效；SQLite 保存仍串行。详细状态/关闭约定见 internal/app/AGENTS.md。
-`./bin/workstation prepare -max 20` 在 data/review 保存脱敏副本和固定开发/留出样本清单；`analyze -kind jev -max 1` 或 `-kind bub` 调用所选能力。二者会话版本一致，Bub 实际输入 Hash 还覆盖可选评估参考。默认 development-1 轮次和累计请求次数存于 SQLite，重启不清零；请求额度已关闭。Python 安装见 python/AGENTS.md。
+`./bin/workstation prepare -max 20` 在 data/review 保存脱敏副本和固定开发/留出样本清单；`analyze -kind jev -max 1` 或 `-kind bub` 调用所选能力。prepare 仅保存会话；首次研发调用先选 bub，再选 jev。Jev 实际输入 Hash 覆盖当前会话及总结内容、Schema 和模型信息，相同内容的重复总结不因运行 ID 变化重复评估。默认 development-1 轮次和累计请求次数存于 SQLite，重启不清零；请求额度已关闭。Python 安装见 python/AGENTS.md。
 
 ## 直接文件索引
 
@@ -84,4 +84,12 @@ Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`�
 | internal | 内部能力 | 配置、Zoho、清洗、存储和同步 |
 | docs | 接口依据 | OAS 与兼容性说明 |
 | web | 前端应用 | Svelte 列表、详情、分析及运行状态 |
+| .github | 自动构建 | Windows/macOS 原生验证和下载产物 |
+| scripts | 打包和启动 | 便携包、异地解压验收、双击入口 |
 | python | Bub 入口 | 固定 stdin/stdout JSON 总结进程及锁定环境 |
+
+## 下载版构建与运行
+
+用户授权增加 Windows x64、macOS Intel/Apple Silicon 自动构建并提交远程；这不包含生产部署。GitHub Actions 构建包含 Go、前端及独立 Python/Bub 环境的包，下载者无需安装开发工具链；操作见 [docs/downloads.md](docs/downloads.md)。源代码仍支持原 .venv 开发方式。
+`python scripts/package.py` 在前端构建后原生打包，`python scripts/smoke_package.py <归档>` 异地解压离线验证。`workstation check` 检查配置、资源和数据库锁，不调用外部服务。
+日志固定在 logs/workstation.log，slog 同时输出终端；lumberjack v2.2.1 实现 10 MiB/3 备份/7 天轮转，启动错误也留存。密钥、正文和 Python 原始 stderr 不写日志。Windows 使用 LockFileEx，Unix 使用 Flock；进程退出释放操作锁。

@@ -1,15 +1,14 @@
 一旦我所属的文件夹有所变化请更新我。
 
 本目录负责固定 Python stdin/stdout 总结入口与锁定的 Bub Core 环境。
-模块关系：Go 发送完整脱敏会话和可选同版本 Jev 参考，本目录返回校验后的 JSON，Go 再次校验并持久化。
+模块关系：Go 发送完整脱敏会话，本目录返回校验后的 JSON，Go 再次校验并持久化。
 不负责数据库、Zoho、工具执行、插件、持久会话记忆、Web 服务或企业微信。
 
 ## 协议和运行
 
-输入只有 `{input:<完整脱敏会话及可选参考>,config:{api_base,api_key,model},schema_version:"bub-summary-v5"}`。
-input 保持 messages、主题、描述等字段平面结构，必有 `conversation_hash`（附参考之前的会话版本）和 `jev_reference`；无可用评估时参考显式为 null，不阻止独立总结。
-非空参考只允许 `{kind:"model_assessment",run_id,conversation_hash,schema_version,requested_model,returned_model,choices:{字段:标签字符串}}`，不接收额外自由文本或概率字段。参考 Hash 必须与 input.conversation_hash 相同，不一致返回安全诊断 `reference_version_mismatch`；Go 负责筛选当前有效评估。
-完整会话与独立参考一同传入无工具 SDK，参考不变成消息或事实，不进入可引用消息 ID 集。Prompt 要求原文优先、缺少证据时承认未知，不能因 Jev 参考推定客户已执行或缺陷已确认，也不让 Bub 重新执行 Jev 评估。
+输入只有 `{input:<完整脱敏会话>,config:{api_base,api_key,model},schema_version:"bub-summary-v6"}`。
+input 保持 messages、主题、描述等字段平面结构，必有 conversation_hash。不再接收 Jev 参考，完整会话独立传入无工具 SDK；总结完成后由 Go 再提供给 Jev。
+Prompt 保留客户明确诉求、风险报告及近期情绪的明确表达，但不自行评估情绪标签、优先级或风险等级；总结仍需消息引用支撑，建议不等于执行。
 配置不从 `.env` 或其他文件加载；模型必须是 `deepseek:模型名`，地址与 Key 显式传入，拒绝空值以避免 SDK 环境回退。
 成功输出 `{ok:true,result,returned_model,request_id,usage}`；失败输出 `{ok:false,error:<固定错误码>,diagnostics?:[{loc,type,code}]}` 并以非零状态退出。
 已经取得供应商 Response 时，即使本地结构、引用或截断校验失败，错误输出也保留 `returned_model`、`request_id` 和 `usage`，不包含原文；认证/网络失败尚无 Response 时这些信息未知，不用请求模型补造。
@@ -48,7 +47,7 @@ v5 结果只有 device_info、customer_feedback、support_responses 三个必有
 设备信息可引用消息；仅当 text 逐字等于 input.product 或为 input.description 的逐字片段时，允许 message_ids=[] 表示工单字段证据。Prompt 禁止设备推断、截断否定/条件或拼接改变含义；没有消息或明确设备字段时三个数组全空。
 本地验证只证明结构、引用、字面字段及部分角色约束，不能证明设备分类、建议与执行等自由文本事实准确。旧 v1/v2 结果保留历史，不自动映射新分类；新版 Schema 使旧结果过期。没有真实模型验证时不能声称本次新格式已真实验证。
 
-验证：`python/.venv/bin/python -m unittest discover -s python -p 'test_*.py'` 使用合成契约及真实 Bub/Republic+HTTPX2 MockTransport。v3 可空分类、字段证据、角色/公开已发约束先在旧代码失败，再验证通过；保留无工具、一次请求、完整会话/可选参考、未知引用及安全诊断、截断失败仍保留元信息、网络错误分类等既有边界。固定 Mock 文字不代表真实模型业务准确率。Go 另进行同契约二次验证并验证真实本地代理子进程，不访问外部模型。
+验证：`python/.venv/bin/python -m unittest discover -s python -p 'test_*.py'` 使用合成契约及真实 Bub/Republic+HTTPX2 MockTransport。v3 可空分类、字段证据、角色/公开已发约束先在旧代码失败，再验证通过；保留无工具、一次请求、完整会话、未知引用及安全诊断、截断失败仍保留元信息、网络错误分类等既有边界。固定 Mock 文字不代表真实模型业务准确率。Go 另进行同契约二次验证并验证真实本地代理子进程，不访问外部模型。
 
 简化：所有新分类共用 Fact，删除旧 Measure/NextStep 模型和仅服务于旧输出的强制建议/执行枚举逻辑。保留 Pydantic 与固定入口、既有字段/错误白名单，无新 SDK、工具或迁移模块。
 
@@ -57,8 +56,8 @@ v5 结果只有 device_info、customer_feedback、support_responses 三个必有
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 协议、运行、版本与能力边界 |
-| main.py | 固定入口 | 完整会话与可选参考、SDK、三类可空事实与来源校验及网络错误分类 |
-| test_main.py | 合成契约验证 | 可空分类、角色/字段证据、完整会话、参考及安全诊断 |
+| main.py | 固定入口 | 完整会话、SDK、三类可空事实与来源校验及网络错误分类 |
+| test_main.py | 合成契约验证 | 可空分类、角色/字段证据、完整会话及安全诊断 |
 | pyproject.toml | 依赖声明 | 稳定版本和 Python 兼容范围 |
 | uv.lock | 自动生成锁文件 | 固定全部解析依赖及校验信息 |
 | .venv/ | 忽略的安装产物 | 本机 Python 解释器与依赖 |
@@ -69,3 +68,5 @@ v4 客户反馈例外：只有单条引用，role=unknown、source=thread、dire
 2026-11-05 整单汇总 v5：仍一次发送完整会话。device_info 最多 10 项；customer_feedback/support_responses 各最多 1 项（无内容为空），text 综合同一工单的主要问题、实际处理进展与当前状态，message_ids 可覆盖多条证据。按主题合并重复内容，禁止逐线程罗列，保持建议/执行/结果区分，不新增评估或下一步建议。Python/Go 双重校验数量，结构形状不变，无新表或二次总结调用。未知作者例外仍限单条逐字引用，不为了归纳而推断身份。
 
 Schema 升级使 v4 旧结果过期，新自动运行仍限原开发集；没有批量手动重跑或修改既有结果。合成 SDK 检查一次请求包含全部四条消息、综合段落保留多条引用；另检查两段消息摘要被拒绝。机械校验仅约束结构及引用，不能证明语义归纳必然正确。
+
+便携包由 scripts/package.py 将独立 CPython 及 uv.lock 依赖装入 runtime/python 和 python/packages，无需用户安装 Python/uv。Go 固定 PYTHONPATH 并禁止用户 site-packages；Windows 仅增加运行所需系统/临时目录环境，不继承密钥。开发仍使用 .venv。

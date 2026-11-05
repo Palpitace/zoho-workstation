@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"syscall"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -57,7 +57,11 @@ func Open(path, department string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	u := url.URL{Scheme: "file", Path: canonical}
+	uriPath := filepath.ToSlash(canonical)
+	if filepath.VolumeName(canonical) != "" && !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath}
 	q := url.Values{"_pragma": {"busy_timeout(5000)", "journal_mode(WAL)", "foreign_keys(1)"}}
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("sqlite", u.String())
@@ -128,7 +132,7 @@ func Open(path, department string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// Lock prevents concurrent writers of one operation on the current Linux target.
+// Lock prevents concurrent writers of one operation on Linux, macOS, and Windows.
 // Callers hold the returned release function until the operation ends. The
 // kernel also releases the lock when the process exits, including after a crash.
 func (s *Store) Lock(operation string) (func(), error) {
@@ -139,15 +143,14 @@ func (s *Store) Lock(operation string) (func(), error) {
 	if err != nil {
 		return nil, errors.New("operation lock unavailable")
 	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = lockFile(lock); err != nil {
 		lock.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		if errors.Is(err, ErrBusy) {
 			return nil, ErrBusy
 		}
 		return nil, errors.New("cannot acquire operation lock")
 	}
 	return func() {
-		syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 		lock.Close()
 	}, nil
 }

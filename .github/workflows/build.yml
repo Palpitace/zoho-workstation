@@ -1,0 +1,72 @@
+# input: main 推送、手动触发或 PR，以及锁定的应用依赖。
+# output: 三个平台原生验证后的便携包与校验和，不包含用户凭据或运行数据。
+# pos: GitHub Actions 构建流程。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
+name: Build desktop packages
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            name: windows-x64
+          - os: macos-15-intel
+            name: macos-x64
+          - os: macos-15
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26.10.0'
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: '12.17.0'
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.7'
+          python-version: '3.12.14'
+      - name: Install locked dependencies
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          uv sync --project python --locked --no-dev
+      - name: Test and build frontend
+        run: |
+          go test ./...
+          go vet ./...
+          pnpm --dir web check
+          pnpm --dir web build
+          uv run --project python --locked --no-dev python -m unittest discover -s python -p 'test_*.py'
+          go run ./cmd/checkdocs
+      - name: Build self-contained package
+        run: python scripts/package.py
+      - name: Verify relocated package
+        run: |
+          for archive in .cache/packages/*.zip .cache/packages/*.tar.gz; do
+            [ -f "$archive" ] || continue
+            python scripts/smoke_package.py "$archive"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zoho-workstation-${{ matrix.name }}
+          path: .cache/packages/*
+          if-no-files-found: error
+          retention-days: 30

@@ -38,10 +38,7 @@ func TestTicketListIdentityFiltersAndClassification(t *testing.T) {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			_, hash, e := analysis.Input(s, raw)
-			if e != nil {
-				t.Fatal(e)
-			}
+			hash := seedSummary(t, db, s, raw, "synthetic")
 			run, _, e := db.StartAnalysis(ctx, store.AnalysisRequest{TicketID: "1", Kind: "jev", InputHash: hash, SchemaVersion: analysis.JevSchema, RequestedModel: "synthetic", Round: app.DevelopmentRound}, false)
 			if e != nil {
 				t.Fatal(e)
@@ -98,7 +95,7 @@ func TestTicketListIdentityFiltersAndClassification(t *testing.T) {
 			for _, r := range got.Data {
 				switch r.ID {
 				case "1":
-					if r.Number != "101" || r.URL != "https://desk.zoho.com/support/example/ShowHomePage.do#Cases/dv/abc" || r.AI["jev"].Category != "hardware" || r.AI["jev"].Stale || !r.AI["bub"].Stale || !r.AI["jev"].Eligible {
+					if r.Number != "101" || r.URL != "https://desk.zoho.com/support/example/ShowHomePage.do#Cases/dv/abc" || r.AI["jev"].Category != "hardware" || r.AI["jev"].Stale || r.AI["bub"].Stale || !r.AI["jev"].Eligible {
 						t.Fatalf("identity/classification/version lost: %+v", r)
 					}
 				case "2":

@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成分析版本与供应商结果。
-// output: 旧输入隔离、重试保留首次终结状态、本地失败不计次及关闭额度后的持久计数证据。
+// output: 旧输入隔离、有限失败重试、本地失败不计次及关闭额度后的持久计数证据。
 // pos: AI 结果存储边界集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store_test
 
@@ -60,7 +60,7 @@ func TestAnalysisVersionsFailuresAndUnlimitedRequestCounts(t *testing.T) {
 	}
 	req.InputHash = "next"
 	view, _ = db.Analysis(ctx, req)
-	if view.Current != nil || !view.Stale || view.Success == nil || view.HasFinishedAttempt {
+	if view.Current != nil || !view.Stale || view.Success == nil {
 		t.Fatal("changed input must mark previous result stale")
 	}
 	if err = db.RecordAnalysisFailure(ctx, req, errors.New("synthetic input too large")); err != nil {
@@ -108,10 +108,6 @@ func TestAnalysisVersionsFailuresAndUnlimitedRequestCounts(t *testing.T) {
 		run, ok, e := db.StartAnalysis(ctx, req, true)
 		if e != nil || !ok {
 			t.Fatalf("request count incorrectly blocked request %d: %v", i+1, e)
-		}
-		view, e = db.Analysis(ctx, req)
-		if e != nil || view.Current.Status != "running" || !view.HasFinishedAttempt {
-			t.Fatal("retry erased the completed first attempt needed to release Bub")
 		}
 		if e = db.FinishAnalysis(ctx, run.ID, "", nil, errors.New("synthetic failure")); e != nil {
 			t.Fatal(e)

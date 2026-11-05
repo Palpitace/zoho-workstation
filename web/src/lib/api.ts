@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单号/安全链接、分类与独立紧凑分析状态及调用计数类型、可取消查询和受保护操作。
+// output: 工单号/安全链接、分类与含等待总结的紧凑分析状态及调用计数类型、可取消查询和受保护操作。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -51,7 +51,7 @@ export type TicketRecord = Ticket & {
 export type AIKind = "jev" | "bub";
 export type Operation = "sync" | AIKind;
 export type AIState = {
-  status: "pending" | "running" | "failed" | "success" | "disabled";
+  status: "waiting" | "pending" | "running" | "failed" | "success" | "disabled";
   stale: boolean;
   automatic_eligible?: boolean;
   priority?: string;
@@ -106,7 +106,7 @@ export type AnalysisRun<Result> = {
   result?: Result;
 };
 
-type AnalysisView<Result> = { current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean };
+type AnalysisView<Result> = { current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub" };
 export type JevView = AnalysisView<{ model: string; answers: Record<string, { type: string; choice: string }> }>;
 
 type SummaryFact = { text: string; message_ids: string[] };
@@ -141,6 +141,7 @@ export async function postAction(path: string, token: string, signal: AbortSigna
 export function aiLabel(value?: AIState): string {
   if (!value) return "未读取";
   if (value.status === "disabled") return "已关闭";
+  if (value.status === "waiting") return "等待总结";
   if (value.status === "running") return value.stale ? "更新中" : "处理中";
   if (value.status === "failed") return value.stale ? "更新失败" : "失败";
   if (value.stale) return "待更新";

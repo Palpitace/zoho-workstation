@@ -1,5 +1,5 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 独立分析记录、本地校验失败、成功结果保留和跨重启调用计数（不限制累计次数）。
+// output: 按输入版本的分析记录、本地校验失败、成功结果保留和跨重启调用计数（不限制累计次数）。
 // pos: SQLite AI 结果与调用计数边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -32,8 +32,6 @@ type AnalysisView struct {
 	Current *AnalysisRun `json:"current"`
 	Success *AnalysisRun `json:"success"`
 	Stale   bool         `json:"stale"`
-	// Derived from matching history, so a retry cannot re-block Bub after failure.
-	HasFinishedAttempt bool `json:"-"`
 }
 type Budget struct {
 	Total int `json:"total"`
@@ -133,9 +131,6 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 		}
 		r.Result = json.RawMessage(body)
 		matches := r.InputHash == req.InputHash && r.SchemaVersion == req.SchemaVersion && r.RequestedModel == req.RequestedModel
-		if matches && r.Status != "running" {
-			view.HasFinishedAttempt = true
-		}
 		if matches && view.Current == nil {
 			copy := r
 			view.Current = &copy

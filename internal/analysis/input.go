@@ -1,5 +1,5 @@
 // input: 原始证据和规范化工单快照。
-// output: 完整脱敏会话及 Bub 可选模型参考，各自实际输入的内容 Hash。
+// output: Bub 完整脱敏会话及 Jev 总结输入，各自实际输入的内容 Hash。
 // pos: 分析输入数据最小化边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -38,29 +38,39 @@ func Input(snapshot ticket.Snapshot, raw ticket.RawSnapshot) (json.RawMessage, s
 	return body, hex.EncodeToString(digest[:]), nil
 }
 
-// JevReference is model interpretation, never a message or factual evidence.
-type JevReference struct {
-	Kind             string            `json:"kind"`
-	RunID            int64             `json:"run_id"`
-	ConversationHash string            `json:"conversation_hash"`
-	SchemaVersion    string            `json:"schema_version"`
-	RequestedModel   string            `json:"requested_model"`
-	ReturnedModel    string            `json:"returned_model"`
-	Choices          map[string]string `json:"choices"`
-}
-
-// BubInput retains every conversation field and versions the actual reference.
-func BubInput(conversation json.RawMessage, hash string, reference *JevReference) (json.RawMessage, string, error) {
-	if reference != nil && (reference.ConversationHash != hash || reference.Kind != "model_assessment") {
-		return nil, "", errors.New("Bub reference does not match conversation")
-	}
+// BubInput retains the complete conversation without downstream assessments.
+func BubInput(conversation json.RawMessage, hash string) (json.RawMessage, string, error) {
 	var input map[string]json.RawMessage
 	if json.Unmarshal(conversation, &input) != nil || input == nil {
 		return nil, "", errors.New("Bub conversation is invalid")
 	}
 	input["conversation_hash"], _ = json.Marshal(hash)
-	input["jev_reference"], _ = json.Marshal(reference)
 	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, "", err
+	}
+	digest := sha256.Sum256(body)
+	return body, hex.EncodeToString(digest[:]), nil
+}
+
+// SummaryInput versions Jev's actual source, excluding run IDs so an identical
+// successful summary can be reused without charging for another assessment.
+func SummaryInput(ticketID, conversationHash, inputHash, schema, model, returnedModel string, result json.RawMessage) (json.RawMessage, string, error) {
+	var saved struct {
+		Summary json.RawMessage `json:"summary"`
+	}
+	if json.Unmarshal(result, &saved) != nil || len(saved.Summary) == 0 || string(saved.Summary) == "null" {
+		return nil, "", errors.New("saved Bub summary is invalid")
+	}
+	body, err := json.Marshal(struct {
+		TicketID         string          `json:"ticket_id"`
+		ConversationHash string          `json:"conversation_hash"`
+		SummaryInputHash string          `json:"summary_input_hash"`
+		SummarySchema    string          `json:"summary_schema"`
+		RequestedModel   string          `json:"summary_requested_model"`
+		ReturnedModel    string          `json:"summary_returned_model"`
+		Summary          json.RawMessage `json:"summary"`
+	}{ticketID, conversationHash, inputHash, schema, model, returnedModel, saved.Summary})
 	if err != nil {
 		return nil, "", err
 	}
