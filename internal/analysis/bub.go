@@ -1,5 +1,5 @@
-// input: 完整脱敏会话及可选 Jev 模型参考、显式配置和固定 Python 环境。
-// output: 经结构与消息引用校验的 Bub 总结 JSON 和实际模型标识。
+// input: 完整脱敏会话及可选 Jev 参考、显式配置、固定 Python 环境和代理白名单。
+// output: 经结构/引用校验的 Bub 总结与模型标识，或不含凭据的网络分类错误。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,12 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 	}
 	command := exec.CommandContext(ctx, python, entry)
 	command.Env = []string{"PATH=/usr/bin:/bin", "PYTHONIOENCODING=utf-8", "PYTHONDONTWRITEBYTECODE=1"}
+	// Preserve transport routing without exposing parent credentials or SDK config.
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"} {
+		if value := os.Getenv(key); value != "" {
+			command.Env = append(command.Env, key+"="+value)
+		}
+	}
 	command.Stdin = bytes.NewReader(body)
 	var output limitedOutput
 	command.Stdout = &output
@@ -162,7 +169,7 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 			}
 		}
 		switch envelope.Error {
-		case "invalid_input", "model_timeout", "model_request_failed", "invalid_summary", "summary_failed":
+		case "invalid_input", "model_timeout", "model_connection_failed", "model_upstream_failed", "model_request_failed", "invalid_summary", "summary_failed":
 			return nil, envelope.ReturnedModel, errors.New("Bub: " + envelope.Error + diagnostic)
 		default:
 			return nil, "", errors.New("Bub did not return a successful structured result")

@@ -1,5 +1,5 @@
 // input: Zoho OAuth 配置、限定部门与调用方 context。
-// output: 只读工单/会话及限定 ID 的增量候选和局部失败回退；错误不含 Token 或正文。
+// output: 只读会话、固定 ID 变化与缺失复核、明确部门迁移及安全限流诊断。
 // pos: Zoho HTTP 与本地采样的边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho
 
@@ -24,6 +24,8 @@ import (
 	"zoho-workstation/internal/ticket"
 )
 
+var ErrOutsideDepartment = errors.New("ticket confirmed outside configured department")
+
 var idPattern = regexp.MustCompile(`^[0-9]+$`)
 
 type Client struct {
@@ -36,9 +38,10 @@ type Client struct {
 }
 
 type responseError struct {
-	status int
-	code   string
-	method string
+	status     int
+	retryAfter time.Duration
+	code       string
+	method     string
 }
 
 func (e *responseError) Error() string {
@@ -46,6 +49,15 @@ func (e *responseError) Error() string {
 		return fmt.Sprintf("remote HTTP %d (%s)", e.status, e.code)
 	}
 	return fmt.Sprintf("remote HTTP %d", e.status)
+}
+
+// RetryAfter exposes only the safe wait duration of an HTTP 429 response.
+func RetryAfter(err error) time.Duration {
+	var response *responseError
+	if errors.As(err, &response) && response.status == http.StatusTooManyRequests {
+		return response.retryAfter
+	}
+	return 0
 }
 
 func New(cfg config.Zoho, transport *http.Client) *Client {
@@ -101,6 +113,17 @@ func (c *Client) do(req *http.Request) (json.RawMessage, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		diagnostic := &responseError{status: resp.StatusCode, method: req.Method}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			diagnostic.retryAfter = 30 * time.Second
+			value := resp.Header.Get("Retry-After")
+			if seconds, e := strconv.ParseUint(value, 10, 64); e == nil && seconds > 0 {
+				diagnostic.retryAfter = time.Duration(min(seconds, uint64((1<<63-1)/time.Second))) * time.Second
+			} else if errors.Is(e, strconv.ErrRange) {
+				diagnostic.retryAfter = time.Duration(1<<63 - 1)
+			} else if at, e := http.ParseTime(value); e == nil && time.Until(at) > 0 {
+				diagnostic.retryAfter = time.Until(at)
+			}
+		}
 		var failure struct {
 			Code string `json:"errorCode"`
 		}
@@ -230,7 +253,17 @@ func (c *Client) Changed(ctx context.Context, ids []string, since, until time.Ti
 			}
 		}
 		if len(rows) < 25 {
-			return changed, nil
+			missing := []string{}
+			for _, id := range ids {
+				if !seen[id] {
+					missing = append(missing, id)
+				}
+			}
+			rechecked, err := c.changedMetadata(ctx, missing, since, until)
+			if err != nil {
+				return nil, err
+			}
+			return append(changed, rechecked...), nil
 		}
 		if added == 0 {
 			return nil, errors.New("incremental pagination made no progress")
@@ -296,8 +329,8 @@ func (c *Client) Fetch(ctx context.Context, id string) (ticket.RawSnapshot, erro
 	if err != nil {
 		return raw, err
 	}
-	if field(raw.Ticket, "id") != id || field(raw.Ticket, "departmentId") != c.cfg.DepartmentID {
-		return raw, errors.New("ticket identity or department mismatch")
+	if err := c.checkDepartment(raw.Ticket, id); err != nil {
+		return ticket.RawSnapshot{}, err
 	}
 	threads, err := pages(ctx, fetch, path+"/threads", "sendDateTime")
 	if err != nil {
@@ -352,14 +385,29 @@ func (c *Client) Fetch(ctx context.Context, id string) (ticket.RawSnapshot, erro
 		return raw, fmt.Errorf("ticket consistency check: %w", err)
 	}
 	raw.Evidence[path+"#after"] = after
-	if field(after, "departmentId") != c.cfg.DepartmentID {
-		return raw, errors.New("ticket moved outside department during read")
+	if err := c.checkDepartment(after, id); err != nil {
+		return ticket.RawSnapshot{}, err
 	}
 	if field(after, "modifiedTime") != field(raw.Ticket, "modifiedTime") {
 		raw.Complete = false
 		raw.Warnings = append(raw.Warnings, "ticket_changed_during_read")
 	}
 	return raw, nil
+}
+
+// A missing department or mismatched ticket identity is not proof of a move.
+func (c *Client) checkDepartment(body json.RawMessage, id string) error {
+	if field(body, "id") != id {
+		return errors.New("ticket identity mismatch")
+	}
+	department := field(body, "departmentId")
+	if !idPattern.MatchString(department) {
+		return errors.New("ticket department unavailable")
+	}
+	if department != c.cfg.DepartmentID {
+		return ErrOutsideDepartment
+	}
+	return nil
 }
 
 type readPage func(string, url.Values) (json.RawMessage, error)

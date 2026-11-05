@@ -68,7 +68,8 @@ func TestChangedStaysInsideFrozenSample(t *testing.T) {
 		searches, details     int32
 		repeat                bool
 	}{
-		{name: "search success", mode: "search", want: []string{"2"}, searches: 1},
+		{name: "search success", mode: "search", want: []string{"2"}, searches: 1, details: 1},
+		{name: "missing search result is not confirmed moved", mode: "search_missing", want: []string{"2", "1"}, searches: 1, details: 1},
 		{name: "search cannot expand IDs", mode: "foreign_id", wantError: "exceeded fixed sample", searches: 1},
 		{name: "search cannot cross department", mode: "foreign_department", wantError: "exceeded fixed sample", searches: 1},
 		{name: "other search errors do not fall back", mode: "server_error", wantError: "remote HTTP 500", searches: 1},
@@ -115,7 +116,7 @@ func TestChangedStaysInsideFrozenSample(t *testing.T) {
 						fmt.Fprint(w, `{"errorCode":"SECRET INPUT","message":"SECRET INPUT"}`)
 						return
 					}
-					if tc.mode == "search" || strings.HasPrefix(tc.mode, "foreign_") {
+					if strings.HasPrefix(tc.mode, "search") || strings.HasPrefix(tc.mode, "foreign_") {
 						id, department := "2", "7"
 						if tc.mode == "foreign_id" {
 							id = "3"
@@ -137,6 +138,10 @@ func TestChangedStaysInsideFrozenSample(t *testing.T) {
 					department := "7"
 					modified := until.Format(time.RFC3339Nano)
 					if id == "1" {
+						if tc.mode == "search_missing" {
+							w.WriteHeader(404)
+							return
+						}
 						modified = from.Add(-time.Second).Format(time.RFC3339Nano)
 					}
 					if tc.mode == "boundaries" && id == "1" {
@@ -267,5 +272,29 @@ func TestFetchReadsFullThreadAndPrivateComments(t *testing.T) {
 	stillTruncated = true
 	if _, err = client.Fetch(context.Background(), "1"); err == nil {
 		t.Fatal("still-truncated content accepted as complete")
+	}
+}
+
+func TestRateLimitPreservesServerWait(t *testing.T) {
+	for _, tc := range []struct {
+		header  string
+		minimum time.Duration
+	}{{"30", 30 * time.Second}, {"172800", 48 * time.Hour}, {"999999999999999999999999", 24 * time.Hour}, {"invalid", 30 * time.Second}, {time.Now().Add(time.Hour).UTC().Format(http.TimeFormat), 59 * time.Minute}} {
+		t.Run(tc.header, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/oauth/v2/token" {
+					fmt.Fprint(w, `{"access_token":"synthetic"}`)
+					return
+				}
+				w.Header().Set("Retry-After", tc.header)
+				w.WriteHeader(429)
+			}))
+			defer server.Close()
+			client := zoho.New(config.Zoho{BaseURL: server.URL, AccountsURL: server.URL, DepartmentID: "7"}, server.Client())
+			_, err := client.Recent(context.Background(), 1)
+			if zoho.RetryAfter(err) < tc.minimum {
+				t.Fatalf("server wait shortened: %v", zoho.RetryAfter(err))
+			}
+		})
 	}
 }

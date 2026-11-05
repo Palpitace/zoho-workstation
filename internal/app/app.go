@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 受控同步、先尝试 Jev 后带可选参考总结的有界可恢复调度。
+// output: 可取消的短间隔分批同步/退避及独立 Jev/Bub 分析调度。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -178,14 +178,49 @@ func (a *App) RequestSync() error {
 	a.mu.Unlock()
 	go func() {
 		defer a.wg.Done()
-		ctx, cancel := context.WithTimeout(a.ctx, 5*time.Minute)
-		result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{SampleSize: 50, MaxTickets: 3, Lookback: a.cfg.SyncLookback})
-		cancel()
-		a.finish("sync", err)
-		slog.Info("automatic sync finished", "fetched", result.Fetched, "failed", result.Failed, "remaining", result.Remaining)
-		if a.ctx.Err() == nil {
+		backoff := 5 * time.Second
+		defer func() {
+			a.mu.Lock()
+			a.busy["sync"] = false
+			a.mu.Unlock()
+		}()
+		for {
+			started := time.Now()
+			ctx, cancel := context.WithTimeout(a.ctx, 5*time.Minute)
+			result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{SampleSize: 50, MaxTickets: 3, Lookback: a.cfg.SyncLookback})
+			cancel()
+			a.mu.Lock()
+			a.lastError["sync"] = ""
+			if err != nil {
+				a.lastError["sync"] = err.Error()
+			}
+			a.mu.Unlock()
+			slog.Info("automatic sync batch finished", "duration_ms", time.Since(started).Milliseconds(), "processed", result.Fetched+result.Failed+result.Stopped, "fetched", result.Fetched, "failed", result.Failed, "stopped", result.Stopped, "remaining", result.Remaining)
+			if a.ctx.Err() != nil {
+				return
+			}
 			a.loadSelection()
 			a.scheduleAnalysis()
+			retryAfter := zoho.RetryAfter(err)
+			if result.Remaining == 0 && retryAfter == 0 {
+				return
+			}
+			// A single worker drains bounded batches without waiting for the
+			// incremental polling interval. Never hold a lock while waiting.
+			delay := time.Second
+			if err != nil {
+				delay = max(backoff, retryAfter)
+				backoff = min(backoff*2, 2*time.Minute)
+			} else {
+				backoff = 5 * time.Second
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-a.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 	}()
 	return nil

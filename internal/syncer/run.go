@@ -1,5 +1,5 @@
-// input: 只读 Zoho 客户端、SQLite 存储、采样限制和回查窗口。
-// output: 冻结样本的公平分批持久化结果及跨重启恢复、完整成功后提交的固定水位。
+// input: 只读 Zoho 客户端、SQLite 存储、固定采样限制和回查窗口。
+// output: 有界分批、独立持久重试与确认移出停止；水位不丢失未完成工单。
 // pos: 拉取、清洗与保存的同步编排边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer
 
@@ -21,14 +21,15 @@ type Options struct {
 	MaxTickets int
 	Lookback   time.Duration
 }
-
 type Result struct {
 	Fetched   int `json:"fetched"`
 	Failed    int `json:"failed"`
+	Stopped   int `json:"stopped"`
 	Remaining int `json:"remaining"`
 }
 
-// Run is serialized by the application; the sample itself is frozen in SQLite.
+// Run is serialized by the application. Failed IDs are durable retry work,
+// independent of the watermark, and are retried at most once per five minutes.
 func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options) (result Result, runErr error) {
 	if opts.SampleSize == 0 {
 		opts.SampleSize = 50
@@ -47,14 +48,15 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	if err != nil {
 		return result, err
 	}
+	scanned := false
 	defer func() {
-		if runErr == nil && result.Remaining > 0 {
-			return
+		watermark := ""
+		if scanned && result.Remaining == 0 {
+			watermark = until.Format(time.RFC3339Nano)
 		}
-		// Cancellation must not erase the failure record or advance the cursor.
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
-		if err := db.Finish(finishCtx, until.Format(time.RFC3339Nano), runErr); err != nil {
+		if err := db.Finish(finishCtx, watermark, runErr); err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("record synchronization result: %w", err))
 		}
 	}()
@@ -70,49 +72,75 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 		if err = db.Reserve(ctx, ids); err != nil {
 			return result, err
 		}
-	} else if state.Watermark != "" && state.Failed == 0 && state.Ready == state.Selected {
-		since, err := time.Parse(time.RFC3339Nano, state.Watermark)
-		if err != nil {
-			return result, errors.New("stored synchronization watermark is invalid")
-		}
-		ids, err = client.Changed(ctx, ids, since.Add(-opts.Lookback), until)
-		if err != nil {
-			return result, fmt.Errorf("find changed tickets: %w", err)
-		}
 	}
 	records, err := db.List(ctx, "", "")
 	if err != nil {
 		return result, err
 	}
-	checked := make(map[string]bool, len(records))
+	byID := make(map[string]store.Record, len(records))
 	attemptedAt := make(map[string]time.Time, len(records))
-	for _, record := range records {
-		checkedAt, err := time.Parse(time.RFC3339Nano, record.CheckedAt)
-		if err == nil {
-			attemptedAt[record.ID] = checkedAt
-		}
-		checked[record.ID] = !record.Pending && record.SyncError == "" && record.Complete && err == nil && !checkedAt.Before(until)
+	for _, r := range records {
+		byID[r.ID] = r
+		attemptedAt[r.ID], _ = time.Parse(time.RFC3339Nano, r.CheckedAt)
 	}
-	pending := ids[:0]
+	candidates, retries := []string{}, []string{}
+	now := time.Now()
 	for _, id := range ids {
-		if !checked[id] {
-			pending = append(pending, id)
+		r := byID[id]
+		checked := attemptedAt[id]
+		if r.SyncStopped {
+			continue
+		}
+		if r.SyncError != "" {
+			if !checked.IsZero() && !checked.Before(until) {
+				continue
+			}
+			// Keep this ID outside Changed's time window until it succeeds. A search
+			// omission or newer watermark must never discard its retry obligation.
+			if checked.IsZero() || !now.Before(checked.Add(5*time.Minute)) {
+				retries = append(retries, id)
+			}
+			continue
+		}
+		if !checked.IsZero() && !checked.Before(until) && !r.Pending && r.Complete {
+			continue
+		}
+		if r.Pending || !r.Complete {
+			retries = append(retries, id)
+		} else {
+			candidates = append(candidates, id)
 		}
 	}
-	ids = pending
-	// Failed attempts remain eligible, but move behind tickets tried less recently.
-	// Persisted attempt times preserve this ordering across process restarts.
+	if state.Watermark != "" {
+		since, err := time.Parse(time.RFC3339Nano, state.Watermark)
+		if err != nil {
+			return result, errors.New("stored synchronization watermark is invalid")
+		}
+		candidates, err = client.Changed(ctx, candidates, since.Add(-opts.Lookback), until)
+		if err != nil {
+			return result, fmt.Errorf("find changed tickets: %w", err)
+		}
+	}
+	ids = append(candidates, retries...)
 	sort.SliceStable(ids, func(i, j int) bool { return attemptedAt[ids[i]].Before(attemptedAt[ids[j]]) })
 	result.Remaining = len(ids)
 	for _, id := range ids {
-		if opts.MaxTickets > 0 && result.Fetched+result.Failed >= opts.MaxTickets {
+		if opts.MaxTickets > 0 && result.Fetched+result.Failed+result.Stopped >= opts.MaxTickets {
 			break
 		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 		result.Remaining--
-		if err := syncTicket(ctx, client, db, id); err != nil {
+		err := syncTicket(ctx, client, db, id)
+		if errors.Is(err, zoho.ErrOutsideDepartment) {
+			if err = db.StopSync(ctx, id); err != nil {
+				return result, err
+			}
+			result.Stopped++
+			continue
+		}
+		if err != nil {
 			result.Failed++
 			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			failureErr := db.Failure(failureCtx, id, err.Error())
@@ -123,12 +151,19 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 			if ctx.Err() != nil {
 				return result, ctx.Err()
 			}
+			if zoho.RetryAfter(err) > 0 {
+				return result, err
+			}
 			continue
 		}
 		result.Fetched++
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	scanned = true
 	if result.Failed > 0 {
-		return result, fmt.Errorf("synchronization incomplete: %d ticket(s) failed", result.Failed)
+		return result, fmt.Errorf("synchronization deferred: %d ticket(s) failed; retry state retained", result.Failed)
 	}
 	return result, nil
 }

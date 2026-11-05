@@ -7,8 +7,8 @@
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 数据职责与索引 |
-| store.go | 存储边界 | 冻结样本、幂等快照、尝试时间、同步水位及操作锁 |
-| store_test.go | 集成测试 | 重启恢复、重复保存、失败不清成功及部门边界 |
+| store.go | 存储边界 | 冻结样本、幂等快照、独立失败/停止状态、同步水位及操作锁 |
+| store_test.go | 集成测试 | 重启/迁移保留快照和预算、重复保存及部门边界 |
 | analysis.go | 分析记录 | 输入版本、本地校验失败、成功结果与调用额度 |
 | analysis_test.go | AI 存储测试 | 版本隔离、invalid 不计费、恢复、预算及操作锁 |
 
@@ -22,7 +22,11 @@ AnalysisBudget 与 StartAnalysis 只统计 `status!='invalid'` 的真实或保�
 Store.Lock 仅允许 `sync`、`analysis`，使用 Open 解析过符号链接的绝对数据库路径创建 `<数据库>.<操作>.lock`。当前目标为 Linux，以非阻塞 Flock 拒绝同库同类并行写者，忙时返回 ErrBusy，其他失败只返回安全泛化说明。
 调用方持有返回的 release 到整个操作结束；release 关闭锁文件或进程退出时内核释放文件锁，Store.Close 本身不代替 release。不使用租约表或后台任务；不同操作的锁独立。锁文件保留以免删除文件导致不同 inode 绕过排他性，并随数据库放在忽略的运行数据目录中。
 
-Get 单次查询同时读取原始/规范化快照，避免并发同步时混用两份版本来脱敏；Record.Raw 明确 json:"-"，不会进入前端。详情同时返回 sync_error/checked_at，列表与详情使用相同同步状态。
+Get 单次查询同时读取原始/规范化快照，避免并发同步时混用两份版本来脱敏；Record.Raw 明确 json:"-"，不会进入前端。详情同时返回 sync_error/checked_at/sync_stopped，列表与详情使用相同同步状态。
 已保留但未保存快照的 ID 返回 pending=true，不编造正文；分析编排必须拒绝 pending 输入。样本外 ID 仍返回 sql.ErrNoRows。
 
-初次 Reserve 在事务中固定最多 50 个唯一 ID；失败和重启不释放名额。原始与规范化 JSON 分列保存，同一 UPDATE 原子提交。sync_state.batch_upper 固定可恢复批次时间，tickets.checked_at 记录最近一次成功或失败尝试的完成时间，供同步按最久未尝试顺序公平调度。Failure 同时保存错误和尝试时间，保留旧快照；checked_at 本身不表示成功，完成判断还必须要求完整快照及无 sync_error。仅完整批次推进水位并清除批次时间。复用已有字段，无需为公平重试迁移数据库。已有采样数据库的批次上界使用非破坏性新增列迁移；数据文件和 WAL 由根 data/ 忽略规则覆盖。
+初次 Reserve 在事务中固定最多 50 个唯一 ID；失败、停止和重启不释放名额。原始与规范化 JSON 分列原子保存。sync_state.batch_upper 固定可恢复批次时间，tickets.checked_at 保存最近尝试时间；Failure 保留旧快照，syncer 据此独立冷却重试。
+
+仅成功确认匹配 ID 的工单移出部门才调用 StopSync：sync_stopped=true、固定安全说明和 checked_at 原子写入，保留快照与 AI 历史，Save 拒绝覆盖已停止记录。Get/List 同时返回停止状态；State.Failed 只统计可重试错误，停止原因仍在列表/详情可见。
+
+Finish 的 watermark 非空表示候选已全部处理（允许存在独立持久失败），更新水位并清空批次；空值只更新错误，不推进或清空窗口。全局错误/取消由调用方传空值。重试义务不依赖水位。老数据库仅非破坏性增加 batch_upper、sync_stopped 默认值列，不改已有快照、AI 记录或预算。

@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单/分析状态类型、可取消查询及受保护的人工操作请求。
+// output: 工单/分析及同步停止状态类型、可取消查询和受保护操作。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -40,6 +40,7 @@ export type Ticket = {
 
 export type TicketRecord = Ticket & {
   pending: boolean;
+  sync_stopped: boolean;
   sync_error?: string;
   checked_at?: string;
   ai?: Record<AIKind, AIState>;
@@ -162,7 +163,8 @@ export function dateTime(value?: string): string {
 }
 
 export function syncLabel(record: TicketRecord): string {
-  if (record.sync_error) return "同步失败";
+  if (record.sync_stopped) return "已停止同步";
+  if (record.sync_error) return "同步失败，等待重试";
   if (record.pending) return "待同步";
   if (!record.complete) return "会话不完整";
   return "已同步";

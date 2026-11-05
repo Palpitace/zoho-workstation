@@ -1,5 +1,5 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 工单会话、评估总结、事实引用和受控重新处理入口。 -->
+<!-- output: 工单会话、部门移出停止原因、评估总结及事实引用。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
@@ -26,9 +26,9 @@
     <p role="status" class="py-12 text-muted-foreground">正在读取工单详情…</p>
   {:else if ticket?.pending}
     <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">工单 #{ticket.id}</h1>
-    <Badge variant={ticket.sync_error ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
-    <p class="text-muted-foreground">这张工单已进入采样范围，详情尚未保存。</p>
-    {#if ticket.sync_error}<p role="alert" class="text-sm text-destructive">{ticket.sync_error}</p>{/if}
+    <Badge variant={ticket.sync_error && !ticket.sync_stopped ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
+    <p class="text-muted-foreground">{ticket.sync_stopped ? "已确认移出配置部门，停止拉取新内容；尚无此前保存的详情。" : "这张工单已进入采样范围，详情尚未保存。"}</p>
+    {#if ticket.sync_error && !ticket.sync_stopped}<p role="alert" class="text-sm text-destructive">{ticket.sync_error}</p>{/if}
   {:else if error}
     <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">无法读取工单</h1>
     <p role="alert" class="text-sm text-destructive">{error}</p>
@@ -37,15 +37,17 @@
       <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>工单 #{ticket.id}</span>
         <Badge variant="outline">{ticket.status || "状态未知"}</Badge>
-        <Badge variant={ticket.sync_error ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
+        <Badge variant={ticket.sync_error && !ticket.sync_stopped ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
       </div>
       <h1 id="page-title" tabindex="-1" class="max-w-4xl text-2xl leading-relaxed font-semibold break-words">{ticket.subject || "无标题工单"}</h1>
       <p class="text-sm text-muted-foreground">更新于 {dateTime(ticket.modified_time)} · 时间按当前设备时区显示</p>
     </header>
 
-    {#if ticket.sync_error}
+    {#if ticket.sync_stopped}
+      <div role="status" class="rounded-md border bg-muted/40 p-4 text-sm">已确认移出配置部门，已停止拉取新内容。以下保留移出前的历史快照，不代表工单当前状态。</div>
+    {:else if ticket.sync_error}
       <div role="alert" class="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm">
-        <p class="font-medium text-destructive">最近同步失败，以下为已保存的内容。</p>
+        <p class="font-medium text-destructive">最近同步失败，以下为已保存的内容。系统将间隔至少 5 分钟重试，不影响其他工单同步。</p>
         <p class="break-words text-muted-foreground">{ticket.sync_error}</p>
       </div>
     {/if}

@@ -1,5 +1,5 @@
 <!-- input: Go 工单记录及附带 AI 状态、查询条件和查询回调。 -->
-<!-- output: 可搜索筛选的列表、Jev 建议及独立同步和分析状态。 -->
+<!-- output: 可搜索筛选的列表、Jev 建议及同步失败/停止和分析状态。 -->
 <!-- pos: 工单列表页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Search } from "@lucide/svelte";
@@ -69,7 +69,7 @@
             <Table.Cell><Badge variant="outline">{record.status || "未知"}</Badge></Table.Cell>
             <Table.Cell class="max-w-52 whitespace-normal break-words text-muted-foreground">{record.product || "未提供"}</Table.Cell>
             <Table.Cell class="text-sm text-muted-foreground tabular-nums">{dateTime(record.modified_time)}</Table.Cell>
-            <Table.Cell><Badge variant={record.sync_error ? "destructive" : "secondary"}>{syncLabel(record)}</Badge></Table.Cell>
+            <Table.Cell><Badge variant={record.sync_error && !record.sync_stopped ? "destructive" : "secondary"}>{syncLabel(record)}</Badge></Table.Cell>
             <Table.Cell class="space-y-1 text-xs"><div>优先级：{jevChoice("priority", record.ai?.jev.priority)}</div><div>情绪：{jevChoice("emotion", record.ai?.jev.emotion)}</div></Table.Cell>
             <Table.Cell class="space-y-2 pr-5">
               {#each kinds as kind}

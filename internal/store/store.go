@@ -1,5 +1,5 @@
 // input: SQLite 路径、固定部门和原始/规范化工单快照。
-// output: 持久化样本、同步尝试时间与进度，以及同一数据库的同步/分析进程锁。
+// output: 持久化样本、独立失败/部门停止状态与同步水位，以及同库操作锁。
 // pos: Go 独占数据库边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -74,7 +74,7 @@ func Open(path, department string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS tickets (
 		id TEXT PRIMARY KEY, selected_at TEXT NOT NULL,
 		subject TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', modified_time TEXT NOT NULL DEFAULT '',
-		raw_json TEXT, snapshot_json TEXT, sync_error TEXT NOT NULL DEFAULT '', checked_at TEXT NOT NULL DEFAULT ''
+		raw_json TEXT, snapshot_json TEXT, sync_error TEXT NOT NULL DEFAULT '', checked_at TEXT NOT NULL DEFAULT '', sync_stopped INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE TABLE IF NOT EXISTS ai_runs (
 		id INTEGER PRIMARY KEY, ticket_id TEXT NOT NULL REFERENCES tickets(id), kind TEXT NOT NULL,
@@ -95,6 +95,17 @@ func Open(path, department string) (*Store, error) {
 	}
 	if hasBatch == 0 {
 		if _, err = db.Exec("ALTER TABLE sync_state ADD COLUMN batch_upper TEXT NOT NULL DEFAULT ''"); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	var hasStopped int
+	if err = db.QueryRow("SELECT count(*) FROM pragma_table_info('tickets') WHERE name='sync_stopped'").Scan(&hasStopped); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if hasStopped == 0 {
+		if _, err = db.Exec("ALTER TABLE tickets ADD COLUMN sync_stopped INTEGER NOT NULL DEFAULT 0"); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -217,7 +228,7 @@ func (s *Store) Save(ctx context.Context, raw ticket.RawSnapshot, snapshot ticke
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE tickets SET subject=?,status=?,modified_time=?,raw_json=?,snapshot_json=?,sync_error='',checked_at=? WHERE id=?`, snapshot.Subject, snapshot.Status, snapshot.ModifiedTime, rawJSON, viewJSON, time.Now().UTC().Format(time.RFC3339Nano), snapshot.ID)
+	result, err := s.db.ExecContext(ctx, `UPDATE tickets SET subject=?,status=?,modified_time=?,raw_json=?,snapshot_json=?,sync_error='',checked_at=? WHERE id=? AND sync_stopped=0`, snapshot.Subject, snapshot.Status, snapshot.ModifiedTime, rawJSON, viewJSON, time.Now().UTC().Format(time.RFC3339Nano), snapshot.ID)
 	if err != nil {
 		return err
 	}
@@ -236,7 +247,7 @@ func (s *Store) Failure(ctx context.Context, id, message string) error {
 func (s *Store) Get(ctx context.Context, id string) (Record, error) {
 	record := Record{Snapshot: ticket.Snapshot{ID: id}}
 	var body, raw []byte
-	err := s.db.QueryRowContext(ctx, "SELECT snapshot_json,raw_json,sync_error,checked_at FROM tickets WHERE id=?", id).Scan(&body, &raw, &record.SyncError, &record.CheckedAt)
+	err := s.db.QueryRowContext(ctx, "SELECT snapshot_json,raw_json,sync_error,checked_at,sync_stopped FROM tickets WHERE id=?", id).Scan(&body, &raw, &record.SyncError, &record.CheckedAt, &record.SyncStopped)
 	if err != nil {
 		return record, err
 	}
@@ -253,14 +264,15 @@ func (s *Store) Get(ctx context.Context, id string) (Record, error) {
 
 type Record struct {
 	ticket.Snapshot
-	Raw       ticket.RawSnapshot `json:"-"`
-	SyncError string             `json:"sync_error,omitempty"`
-	Pending   bool               `json:"pending"`
-	CheckedAt string             `json:"checked_at,omitempty"`
+	Raw         ticket.RawSnapshot `json:"-"`
+	SyncStopped bool               `json:"sync_stopped"`
+	SyncError   string             `json:"sync_error,omitempty"`
+	Pending     bool               `json:"pending"`
+	CheckedAt   string             `json:"checked_at,omitempty"`
 }
 
 func (s *Store) List(ctx context.Context, query, status string) ([]Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at FROM tickets WHERE (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id LIMIT 50`, query, query, status, status)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at,sync_stopped FROM tickets WHERE (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id LIMIT 50`, query, query, status, status)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +281,7 @@ func (s *Store) List(ctx context.Context, query, status string) ([]Record, error
 	for rows.Next() {
 		var r Record
 		var body []byte
-		if err = rows.Scan(&r.ID, &body, &r.SyncError, &r.CheckedAt); err != nil {
+		if err = rows.Scan(&r.ID, &body, &r.SyncError, &r.CheckedAt, &r.SyncStopped); err != nil {
 			return nil, err
 		}
 		r.Pending = body == nil
@@ -288,7 +300,7 @@ func (s *Store) State(ctx context.Context) (State, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT department,watermark,batch_upper,last_attempt,last_error,
 		(SELECT count(*) FROM tickets),
 		(SELECT count(*) FROM tickets WHERE snapshot_json IS NOT NULL),
-		(SELECT count(*) FROM tickets WHERE sync_error!='') FROM sync_state WHERE id=1`).Scan(&v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.Selected, &v.Ready, &v.Failed)
+		(SELECT count(*) FROM tickets WHERE sync_error!='' AND sync_stopped=0) FROM sync_state WHERE id=1`).Scan(&v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.Selected, &v.Ready, &v.Failed)
 	return v, err
 }
 
@@ -303,10 +315,21 @@ func (s *Store) Start(ctx context.Context) (time.Time, error) {
 }
 
 func (s *Store) Finish(ctx context.Context, watermark string, runErr error) error {
+	message := ""
 	if runErr != nil {
-		_, err := s.db.ExecContext(ctx, "UPDATE sync_state SET last_error=? WHERE id=1", runErr.Error())
+		message = runErr.Error()
+	}
+	if watermark == "" {
+		_, err := s.db.ExecContext(ctx, "UPDATE sync_state SET last_error=? WHERE id=1", message)
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, "UPDATE sync_state SET watermark=?,last_error='',batch_upper='' WHERE id=1", watermark)
+	_, err := s.db.ExecContext(ctx, "UPDATE sync_state SET watermark=?,last_error=?,batch_upper='' WHERE id=1", watermark, message)
+	return err
+}
+
+// StopSync preserves the last in-scope snapshot and permanently excludes this
+// reserved ID from network reads; only a verified department change permits it.
+func (s *Store) StopSync(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE tickets SET sync_stopped=1,sync_error='confirmed outside configured department; historical snapshot retained',checked_at=? WHERE id=?", time.Now().UTC().Format(time.RFC3339Nano), id)
 	return err
 }

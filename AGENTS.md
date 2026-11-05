@@ -8,7 +8,7 @@
 
 用户已正式启动 Goal，当前进入实现与验证阶段。按 [GOAL.md](GOAL.md) 的完整交付要求自主执行，复用已验证的 Labelife 部门配置。
 进度及阻塞统一记录在 [PROGRESS.md](PROGRESS.md)。本文件是工程约定，不重复复制完整 Goal。
-2026-11-05 用户明确授权本次提交并上传源码至 https://github.com/Palpitace/zoho-workstation 的 main 分支；此授权不包含上传凭据/运行数据或部署生产。
+2026-11-05 用户明确授权首次源码上传，并在 Issue #1 修复后授权提交、推送合并到 https://github.com/Palpitace/zoho-workstation 的 main 分支；此授权不包含上传凭据/运行数据或部署生产。
 
 ## 固定决策
 
@@ -61,7 +61,7 @@ Zoho 地址使用实际数据中心的 origin，不含 `/api/v1` 或 `/oauth/v2/
 
 从项目根执行：`pnpm --dir web install --frozen-lockfile` 安装前端固定依赖；`make test` 运行 Go 合成测试、前端类型及文档结构检查；`make build` 构建前端静态文件与 Go 程序；`make sample` 固定最多 50 个样本 ID 并补齐本轮最多 3 张；`make run` 构建并启动本机服务。前端开发用 `pnpm --dir web dev` 代理本机 Go API。
 首次可用 `make setup` 依次安装锁定的 Go、pnpm 和 uv 依赖；`make test` 同时执行 Python 合成契约检查。依赖版本只在需要兼容性变化时更新。
-Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`，TCP 监听 IP 可由 APP_LISTEN_HOST 配置。Windows/WSL/容器访问步骤见 docs/compatibility.md。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。服务启动后按 SYNC_INTERVAL 自动同步（每批最多 3 张）并调度 Jev 后的可选参考总结；样本集合冻结后复用，不重建数据库绕过采样上限。
+Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`，TCP 监听 IP 可由 APP_LISTEN_HOST 配置。Windows/WSL/容器访问步骤见 docs/compatibility.md。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。服务启动后接续处理固定样本待同步批次（每批最多 3 张、正常间隔 1 秒、失败退避），处理完后按 SYNC_INTERVAL 常规增量轮询；同步独立冷却失败工单，确认移出部门则保留历史并停止读取，水位不再等待单票恢复。继续调度 Jev 后的可选参考总结；样本集合冻结后复用，不重建数据库绕过采样上限。
 页面提供 POST `/api/sync` 与 `/api/tickets/:id/analysis/:kind`，校验本机 Host、允许 Origin 与临时会话令牌。serve 持有同库同步/分析操作锁，运行期间使用页面操作；CLI sample/analyze 会拒绝并发写者。后台自动评估只选择固定开发集，留出样本不自动调用；模型预算耗尽继续同步和展示。详细状态/关闭约定见 internal/app/AGENTS.md。
 `./bin/workstation prepare -max 20` 在 data/review 保存脱敏副本和固定开发/留出样本清单；`analyze -kind jev -max 1` 或 `-kind bub` 调用所选能力。二者会话版本一致，Bub 实际输入 Hash 还覆盖可选评估参考。研发默认 development-1 轮次的 20 次与全 Goal 60 次预算存于 SQLite，重启不清零。Python 安装见 python/AGENTS.md。
 

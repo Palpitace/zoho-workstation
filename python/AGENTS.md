@@ -14,6 +14,7 @@ input 保持 messages、主题、描述等字段平面结构，必有 `conversat
 成功输出 `{ok:true,result,returned_model,request_id,usage}`；失败输出 `{ok:false,error:<固定错误码>,diagnostics?:[{loc,type,code}]}` 并以非零状态退出。
 已经取得供应商 Response 时，即使本地结构、引用或截断校验失败，错误输出也保留 `returned_model`、`request_id` 和 `usage`，不包含原文；认证/网络失败尚无 Response 时这些信息未知，不用请求模型补造。
 stdout 只输出一份 JSON；stderr 仅输出不含正文和凭据的错误码。Go 必须使用固定解释器/入口、stdin 和外层进程超时，不拼接 Shell。
+Go 子进程允许继承 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 的大小写形式；本入口不读取其他父进程配置，也不记录代理值。锁定 Republic 的 APITimeoutError 对应 model_timeout，APIConnectionError 对应 model_connection_failed，APIStatusError/APIResponseError 对应 model_upstream_failed；其他 RepublicError 仍为 model_request_failed。HTTP 状态、响应正文、异常 cause/repr 和代理认证信息均不输出。SDK Mock 用连接异常、连接超时和 HTTP 503 覆盖分类及单次请求约束；真实子进程模拟代理检查位于 internal/analysis/bub_test.go。
 诊断最多 16 项，每项 loc 最多 8 层，只保留已知结构字段及有界索引；任意额外字段名统一为 `unknown_field`。
 type/code 都来自本地白名单，不输出 Pydantic input、msg、ctx、模型正文、HTTP 响应或异常 repr；可区分未知引用、缺少引用、执行/结果冲突、截断、空白和结构错误。
 过去只返回 `invalid_summary` 且原文已丢弃的请求不能追溯具体原因；新增诊断只用于后续获准请求，不自动重试或扩大预算。
@@ -58,8 +59,8 @@ v2 设计简化检查：继续复用已有消息引用校验和单份 input 序�
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 协议、运行、版本与能力边界 |
-| main.py | 固定入口 | 完整会话与可选参考、SDK、消息引用校验及安全诊断 |
-| test_main.py | 合成契约验证 | 会话完整性、参考隔离、状态、安全诊断与失败模型追溯 |
+| main.py | 固定入口 | 完整会话与可选参考、SDK、消息引用校验及网络错误安全分类 |
+| test_main.py | 合成契约验证 | 会话完整性、参考隔离、状态、安全诊断与网络失败分类 |
 | pyproject.toml | 依赖声明 | 稳定版本和 Python 兼容范围 |
 | uv.lock | 自动生成锁文件 | 固定全部解析依赖及校验信息 |
 | .venv/ | 忽略的安装产物 | 本机 Python 解释器与依赖 |

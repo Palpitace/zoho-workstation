@@ -1,9 +1,11 @@
-# input: 合成会话、可选 Jev 参考及结构化模型结果。
-# output: 完整会话传递、参考隔离、状态与安全诊断的 SDK Mock 证据，不调用真实模型。
+# input: 合成会话、可选 Jev 参考、结构化模型结果和 SDK 模拟网络错误。
+# output: 会话契约及连接、超时、上游错误安全分类证据，不调用真实模型。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
+import io
 import json
+import types
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +17,49 @@ from main import Snapshot, validate_summary, validation_diagnostics
 
 
 class SummaryContractTest(unittest.TestCase):
+    def test_request_failures_have_safe_distinct_codes(self):
+        payload = json.dumps({
+            "input": {"conversation_hash": "synthetic", "jev_reference": None,
+                      "messages": [{"id": "m1", "role": "customer", "body": "Help"}]},
+            "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
+            "schema_version": "bub-summary-v2",
+        }).encode()
+        original = main.republic.get_model
+        for error, expected in (
+            (httpx2.ConnectError("synthetic-private-proxy"), "model_connection_failed"),
+            (httpx2.ConnectTimeout("synthetic-private-proxy"), "model_timeout"),
+            (httpx2.Response(503, text="synthetic-private-provider-body"), "model_upstream_failed"),
+        ):
+            with self.subTest(expected=expected):
+                calls = []
+
+                def respond(request):
+                    calls.append(request)
+                    if isinstance(error, Exception):
+                        raise error
+                    return error
+
+                client = httpx2.AsyncClient(transport=httpx2.MockTransport(respond), trust_env=False)
+
+                def configured(*args, **kwargs):
+                    return original(*args, **kwargs, http_client=client)
+
+                output, logs = io.StringIO(), io.StringIO()
+                try:
+                    with (
+                        patch.object(main.republic, "get_model", side_effect=configured),
+                        patch.object(main.sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(payload))),
+                        patch.object(main.sys, "stdout", output),
+                        patch.object(main.sys, "stderr", logs),
+                    ):
+                        status = main.main()
+                finally:
+                    asyncio.run(client.aclose())
+                self.assertEqual(status, 1)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(json.loads(output.getvalue()), {"ok": False, "error": expected})
+                self.assertNotIn("synthetic-private", output.getvalue() + logs.getvalue())
+
     def test_suggestion_execution_and_references(self):
         snapshot = Snapshot.model_validate({
             "conversation_hash": "synthetic-conversation",

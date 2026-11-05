@@ -23,12 +23,12 @@
 官方网页：https://desk.zoho.com/DeskAPIDocument 。本地依据为 zoho-oas/v1.0 下的 Ticket.json、Search.json、Thread.json、TicketComment.json 及引用文件。
 
 - 普通列表使用 `departmentId`、`sortBy=-createdTime`、`from=0` 和受剩余样本额度限制的 `limit`。不能使用缺乏依据的 `sortBy=modifiedTime`。
-- 增量优先使用 `/tickets/search`，包含固定 `departmentId`、已冻结样本的 `id` 集合以及 `modifiedTimeRange`。需要 `Desk.search.READ`；当前真实服务返回 403 FORBIDDEN，未据此推定具体权限原因。已验证仅在固定 ID 内 GET 详情并检查 modifiedTime 的回退，不扩大扫描范围；任一详情失败仍不推进水位。请求代价详见 ../internal/zoho/AGENTS.md。
+- 增量优先使用 `/tickets/search`，包含固定 `departmentId`、已冻结样本的 `id` 集合以及 `modifiedTimeRange`。需要 `Desk.search.READ`；当前真实服务返回 403 FORBIDDEN，未据此推定具体权限原因。已验证仅在固定 ID 内 GET 详情并检查 modifiedTime 的回退，不扩大扫描范围；单票失败独立持久保留并冷却重试，不再阻塞其他候选的水位；全局查询错误/取消仍不提交批次。搜索成功但缺失的固定 ID 也用详情复核，缺失本身不认定移出。请求代价详见 ../internal/zoho/AGENTS.md。
 - 搜索 from 上限 OAS 为 999，网页为 4999；当前实现保守使用 999。本项目最多 50 个固定 ID，不应触及该上限。
 - 普通列表排序字段 OAS 与网页不同，共同支持 createdTime；采用其交集，不修改第三方文件。
 - 线程和评论 from 均从 0 开始。本地每页 50；线程每项再取详情。详情 `isContentTruncated=true` 时按已知同源路径调用 fullContent，不能直接信任返回 URL。
 - fullContent 与线程详情采用相同 JSON 形状。仍截断或缺少 content 视为读取失败，不标成完整。
-- 会话获取后再次读取工单更新时间，若期间发生改变则标记不完整并待重试，不推进成功水位。
+- 会话获取后再次读取工单更新时间，若期间发生改变则标记不完整并独立待重试；水位表示批次处理进度，不代表每张会话完整。确认同一 ID 部门不同才停止后续读取并保留历史，不凭 403/404 或计数不一致推断移出。
 - 未知动态字段保留于原始响应，不使用拒绝未知字段的严格解码。联系人/产品使用工单 include 展开，不批量抓取联系人或产品库。
 
 ## AI 接口
@@ -58,3 +58,9 @@ wsl.exe -- docker port wslc 8080/tcp
 若 Docker 所在 WSL 不是默认发行版，先用 `wsl.exe --list --verbose` 查看，再用 `wsl.exe -d <发行版名称> -- docker port wslc 8080/tcp`。目标是宿主回环 127.0.0.1:8080 转发到容器 8080，然后在 Windows 打开 http://localhost:8080。现有容器映射需在宿主确认；不能为了添加映射直接删除/重建含用户数据的容器。
 
 依据：[Microsoft WSL 网络说明](https://learn.microsoft.com/en-us/windows/wsl/networking)、[Docker 端口发布说明](https://docs.docker.com/engine/network/port-publishing/)。Paseo 的客户端连接本身不证明项目 8080 已发布；其连接机制见 [Paseo connectivity](https://paseo.sh/docs/connectivity)。Windows 端实测尚待宿主映射确认，不将容器内验证标成 Windows 已可访问。
+
+## Issue #1 运行调整（2026-11-05）
+
+首轮冻结采样仍最多 50 张、每批最多 3 张；有剩余时正常间隔 1 秒接续，失败退避 5 秒起、最多 2 分钟，429 另遵守 Retry-After。完成后恢复 SYNC_INTERVAL 的常规轮询。单票失败每至少 5 分钟重试一次，重启不会丢失；旧 SQLite 自动新增一个 sync_stopped 列，已有快照、分析记录和额度不变。
+
+Bub 从启动 Go 的环境中显式继承大小写 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY；需要代理时先在本机启动环境配置可达地址，不把代理认证写入命令行或提交到仓库。仍不继承 Zoho/Jev/其他环境凭据；模型 Key 通过原有 stdin 传入。连接失败、超时和上游响应错误有不同固定错误码。修改代理后须重新启动 Go 服务才能继承新环境；本次修复不会自动重置已用完的研发额度或重发真实模型请求。

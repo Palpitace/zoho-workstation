@@ -1,5 +1,5 @@
-# input: stdin 中的完整脱敏会话、可选 Jev 参考、最小模型配置及固定 Schema 版本。
-# output: stdout 单份消息证据总结或安全诊断及模型元信息；参考不作为事实或消息引用。
+# input: stdin 中完整脱敏会话、可选 Jev 参考、最小模型配置、Schema 和允许的代理环境。
+# output: stdout 单份消息证据总结或安全分类诊断及模型元信息，不输出代理或异常原文。
 # pos: Go 到无工具 Bub Core 的固定进程入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -361,6 +361,10 @@ def main() -> int:
             result = asyncio.run(asyncio.wait_for(summarize(request), timeout=75))
         except (TimeoutError, errors.APITimeoutError):
             result = {"ok": False, "error": "model_timeout"}
+        except errors.APIConnectionError:
+            result = {"ok": False, "error": "model_connection_failed"}
+        except (errors.APIStatusError, errors.APIResponseError):
+            result = {"ok": False, "error": "model_upstream_failed"}
         except errors.RepublicError:
             result = {"ok": False, "error": "model_request_failed"}
         except ValueError as error:
