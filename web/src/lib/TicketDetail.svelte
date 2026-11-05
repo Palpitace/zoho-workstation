@@ -1,5 +1,5 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 紧凑工单信息、顺序排列的评估总结和默认折叠的倒序会话。 -->
+<!-- output: 紧凑工单信息、评估总结、工单独立引用导航和折叠倒序会话。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
@@ -84,7 +84,9 @@
 
     {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">此工单未纳入自动分析样本，可手动评估或总结。</p>{/if}
     <JevAssessment view={jev} loading={analysisLoading} error={analysisError} control={controls.jev} onRerun={() => onRerun("jev")} />
-    <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />
+    {#key ticket.id}
+      <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />
+    {/key}
 
     {#key ticket.id}
     <details id="conversation" class="rounded-lg border" aria-labelledby="conversation-title">

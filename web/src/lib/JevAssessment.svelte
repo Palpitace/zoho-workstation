@@ -1,5 +1,5 @@
 <!-- input: Jev 结果、独立操作反馈和重新评估回调。 -->
-<!-- output: 区分未知/失败/过期的评估及重新评估入口，隐藏模型结果来源。 -->
+<!-- output: 区分未知/失败/过期的评估及重新评估入口，无结果来源面板或说明注脚。 -->
 <!-- pos: 工单详情中的 Jev 展示边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -56,7 +56,5 @@
     <div><h3 class="mb-3 text-sm font-medium">客户明确诉求</h3><dl class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-3">
       {#each requests as [key, label]}<div class="flex flex-wrap gap-x-2"><dt class="text-muted-foreground">{label}</dt><dd>{answer(`request_${key}`)}</dd></div>{/each}
     </dl></div>
-    <p class="text-xs leading-relaxed text-muted-foreground">建议优先级不修改 Zoho 优先级。风险线索不代表已确认缺陷；未见风险线索也不代表低风险。</p>
-
   {:else if !loading && !error}<p class="text-sm text-muted-foreground">尚无成功评估。未知、失败或信息不足不会显示为低风险。</p>{/if}
 </section>

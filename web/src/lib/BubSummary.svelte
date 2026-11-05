@@ -1,5 +1,5 @@
 <!-- input: Bub 结果、当前消息、操作反馈和重新总结回调。 -->
-<!-- output: 按有证据才显示的设备、客户反馈和客服回复三段总结及引用定位。 -->
+<!-- output: 三段按需总结、引用定位及返回原总结引用的浮动入口。 -->
 <!-- pos: 工单详情中的 Bub 总结展示与证据定位。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -15,14 +15,22 @@
     ["support_responses", "客服回复或给予的排查"],
   ] as const;
   const failed = $derived(view?.current?.status === "failed" || view?.current?.status === "invalid");
-  function showMessage(message: Message) {
+  let returnTarget = $state<HTMLElement | null>(null);
+  function showMessage(message: Message, origin: HTMLElement) {
     const element = document.getElementById(`message-${message.source}-${message.id}`);
     if (!element) return;
+    returnTarget = origin;
     for (let parent = element.parentElement; parent; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;
     }
     element.focus({ preventScroll: true });
-    element?.scrollIntoView({ block: "start" });
+    element.scrollIntoView({ block: "start" });
+  }
+  function returnToSummary() {
+    const target = returnTarget?.isConnected ? returnTarget : document.getElementById("bub-title");
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: "center" });
+    returnTarget = null;
   }
 </script>
 
@@ -31,7 +39,7 @@
     {#each ids as id}
       {@const matches = messages.filter((message) => message.id === id)}
       {#if matches.length === 1}
-        <Button variant="link" class="min-h-10 max-w-full p-0 text-xs whitespace-normal break-all" aria-label={`查看引用消息 ${id}`} onclick={() => showMessage(matches[0])}>消息 {id}</Button>
+        <Button variant="link" class="min-h-10 max-w-full p-0 text-xs whitespace-normal break-all" aria-label={`查看引用消息 ${id}`} onclick={(event) => showMessage(matches[0], event.currentTarget)}>消息 {id}</Button>
       {:else}
         <span class="break-all">消息 {id}：{matches.length === 0 ? "当前会话中未找到" : "存在多条匹配，需核对"}</span>
       {/if}
@@ -41,7 +49,7 @@
 
 <section aria-labelledby="bub-title" class="space-y-5 border-t pt-6" aria-busy={loading}>
   <header class="flex flex-wrap items-center gap-3">
-    <h2 id="bub-title" class="text-lg font-semibold">Bub 沟通总结</h2>
+    <h2 id="bub-title" tabindex="-1" class="text-lg font-semibold">Bub 沟通总结</h2>
     {#if failed}<Badge variant="destructive">{view?.current?.status === "invalid" ? "无法总结" : "最近总结失败"}</Badge>
     {:else if view?.current?.status === "running"}<Badge variant="secondary">总结中</Badge>
     {:else if view?.success}<Badge variant="secondary">已有总结</Badge>
@@ -81,3 +89,7 @@
     <p class="text-sm text-muted-foreground">已有旧版总结已保留。请重新总结，生成设备信息、客户反馈和客服回复的新结构。</p>
   {:else if !loading && !error}<p class="text-sm text-muted-foreground">尚无成功总结。</p>{/if}
 </section>
+
+{#if returnTarget}
+  <Button class="fixed right-5 bottom-5 z-40 shadow-lg" onclick={returnToSummary}>返回总结</Button>
+{/if}
