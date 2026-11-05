@@ -1,5 +1,5 @@
 <!-- input: 浏览器导航、Go 查询/操作 API 及会话防护令牌。 -->
-<!-- output: 工单界面、受控人工操作（无累计额度拦截）及可见页面的轻量进度刷新。 -->
+<!-- output: 支持状态/产品筛选的工单界面、受控人工操作（无累计额度拦截）及可见页面的轻量进度刷新。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onMount, untrack } from "svelte";
@@ -22,6 +22,8 @@
   let analysisError = $state("");
   let query = $state("");
   let statusFilter = $state("");
+  let productFilter = $state("");
+  let productOptions = $state<string[]>([]);
   let statusOptions = $state<string[]>([]);
   let loading = $state(false);
   let detailLoading = $state(false);
@@ -38,6 +40,7 @@
   let polling = false;
   let appliedQuery = "";
   let appliedStatusFilter = "";
+  let appliedProductFilter = "";
   const actionRequests = new Map<Operation, AbortController>();
 
   function errorText(error: unknown): string {
@@ -67,16 +70,17 @@
     const signal = controller.signal;
     refreshing = true;
     loading = !silent;
-    if (!silent) { appliedQuery = query; appliedStatusFilter = statusFilter; }
-    const params = new URLSearchParams({ q: appliedQuery, status: appliedStatusFilter });
+    if (!silent) { appliedQuery = query; appliedStatusFilter = statusFilter; appliedProductFilter = productFilter; }
+    const params = new URLSearchParams({ q: appliedQuery, status: appliedStatusFilter, product: appliedProductFilter });
     const [ticketsResult, statusResult] = await Promise.allSettled([
-      !ticketID && !statusPage ? getJSON<{ data: TicketRecord[] }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
+      !ticketID && !statusPage ? getJSON<{ data: TicketRecord[]; filters: { statuses: string[]; products: string[] } }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
       knownStatus ? Promise.resolve(knownStatus) : getJSON<SystemStatus>("/api/status", signal),
     ]);
     if (signal.aborted) return;
     if (ticketsResult.status === "fulfilled" && ticketsResult.value) {
       records = ticketsResult.value.data;
-      statusOptions = [...new Set([...statusOptions, ...records.map((record) => record.status).filter(Boolean)])].sort();
+      statusOptions = ticketsResult.value.filters.statuses;
+      productOptions = ticketsResult.value.filters.products;
       listError = "";
     } else if (ticketsResult.status === "rejected") listError = errorText(ticketsResult.reason);
     if (statusResult.status === "fulfilled") { status = statusResult.value; statusError = ""; }
@@ -199,7 +203,7 @@
       {:else if ticketID}
         <TicketDetail ticket={detail} loading={detailLoading} error={detailError} {jev} {bub} {analysisLoading} {analysisError} {controls} onRerun={(kind: AIKind) => operate(kind)} />
       {:else}
-        <TicketList {records} {loading} error={listError} bind:query bind:statusFilter {statusOptions} onSearch={() => refresh()} />
+        <TicketList {records} {loading} error={listError} bind:query bind:statusFilter bind:productFilter {statusOptions} {productOptions} onSearch={() => refresh()} />
       {/if}
     </main>
   </div>

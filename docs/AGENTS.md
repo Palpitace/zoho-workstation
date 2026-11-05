@@ -11,3 +11,5 @@
 | compatibility.md | 实现依据 | 固定版本、Skills、API/代理/并发同步与单封来信、请求计数及 Bub Schema 兼容性及 Windows/WSL/容器访问 |
 
 compatibility.md 追加合并旧工单的只读历史依据/实测限制、背景色及 Bub v5 整单汇总部署兼容说明。
+
+compatibility.md 记录业务全量已同步分析、列表号/分类/筛选及本轮 Matt Pocock TDD 核对。

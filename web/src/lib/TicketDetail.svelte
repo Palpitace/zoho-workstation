@@ -1,12 +1,12 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 紧凑详情、明确合并/删除/移出状态及角色背景色、独立引用导航和折叠倒序会话。 -->
+<!-- output: 真实工单号链接、紧凑详情、明确合并/删除/移出状态及角色背景色、独立引用导航和折叠倒序会话。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
-  import { dateTime, syncLabel, type Message, type TicketRecord, type JevView, type BubView, type AIKind, type ActionFeedback } from "./api";
+  import { dateTime, syncLabel, ticketURL, type Message, type TicketRecord, type JevView, type BubView, type AIKind, type ActionFeedback } from "./api";
   import JevAssessment from "./JevAssessment.svelte";
   import BubSummary from "./BubSummary.svelte";
 
@@ -31,6 +31,8 @@
     if (message.role === "agent") return "bg-emerald-50 dark:bg-emerald-950/30";
     return "bg-muted/30";
   }
+  const zohoLink = $derived(ticketURL(ticket?.web_url));
+  const displayNumber = $derived(ticket?.ticket_number ? `工单 #${ticket.ticket_number}` : "工单号待同步");
   const stopReason = $derived(ticket?.sync_error === "ticket confirmed merged in Zoho" ? "Zoho 已将此工单合并" : ticket?.sync_error === "ticket confirmed deleted in Zoho" ? "Zoho 已删除此工单" : "已确认移出配置部门");
 </script>
 
@@ -39,7 +41,7 @@
   {#if loading}
     <p role="status" class="py-12 text-muted-foreground">正在读取工单详情…</p>
   {:else if ticket?.pending}
-    <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">工单 #{ticket.id}</h1>
+    <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">{displayNumber}</h1>
     <Badge variant={ticket.sync_error && !ticket.sync_stopped ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
     <p class="text-muted-foreground">{ticket.sync_stopped ? `${stopReason}，停止拉取新内容；尚无此前保存的详情。` : "这张工单已进入采样范围，详情尚未保存。"}</p>
     {#if ticket.sync_error && !ticket.sync_stopped}<p role="alert" class="text-sm text-destructive">{ticket.sync_error}</p>{/if}
@@ -49,7 +51,7 @@
   {:else if ticket}
     <header class="space-y-3">
       <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>工单 #{ticket.id}</span>
+        {#if zohoLink}<a href={zohoLink} target="_blank" rel="noopener noreferrer" class="underline-offset-4 hover:underline">{ticket.ticket_number ? displayNumber : "打开 Zoho 工单"} ↗</a>{:else}<span>{displayNumber}</span>{/if}
         <Badge variant="outline">{ticket.status || "状态未知"}</Badge>
         <Badge variant={ticket.sync_error && !ticket.sync_stopped ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
       </div>
@@ -90,7 +92,7 @@
       </Card.Content>
     </Card.Root>
 
-    {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">此工单未纳入自动分析样本，可手动评估或总结。</p>{/if}
+    {#if ticket.ai?.jev.automatic_eligible === false || ticket.ai?.bub.automatic_eligible === false}<p class="text-sm text-muted-foreground">会话尚未完整同步或工单已停止同步，暂不自动分析。</p>{/if}
     <JevAssessment view={jev} loading={analysisLoading} error={analysisError} control={controls.jev} onRerun={() => onRerun("jev")} />
     {#key ticket.id}
       <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />

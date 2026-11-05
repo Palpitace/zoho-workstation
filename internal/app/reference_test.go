@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成 Jev HTTP 服务和仅接收 stdin 的临时 Python 入口。
-// output: 三段 Bub 总结等待首次 Jev 结束、完整会话及同版参考/失败空参考的公共边界证据。
+// output: 全部有效工单连续分析、三段 Bub 总结等待首次 Jev 结束、完整会话及同版参考/失败空参考的公共边界证据。
 // pos: 分析参考调度集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -48,7 +48,7 @@ func TestAutomaticBubReceivesCompletedJevReference(t *testing.T) {
 request = json.load(sys.stdin)
 with open("captured.tmp", "w", encoding="utf-8") as output:
     json.dump(request, output)
-os.replace("captured.tmp", "captured.json")
+os.replace("captured.tmp", "captured-" + request["input"]["ticket_id"] + ".json")
 print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result": {
     "device_info": [],
     "customer_feedback": [{"text": "Customer has not upgraded. Printer still disconnects.", "message_ids": ["m2"]}],
@@ -58,8 +58,10 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 			if err := os.WriteFile("python/main.py", []byte(entry), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile("data/review/manifest.json", []byte(`[{"ticket_id":"1","split":"development"}]`), 0600); err != nil {
-				t.Fatal(err)
+			if !success {
+				if err := os.WriteFile("data/review/manifest.json", []byte(`[{"ticket_id":"1","split":"holdout"}]`), 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			started, release := make(chan struct{}), make(chan struct{})
 			var releaseOnce sync.Once
@@ -115,7 +117,7 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 				t.Fatal(err)
 			}
 			defer db.Close()
-			if err = db.Reserve(ctx, []string{"1"}); err != nil {
+			if err = db.Reserve(ctx, []string{"1", "2", "3", "4"}); err != nil {
 				t.Fatal(err)
 			}
 			snapshot := ticket.Snapshot{ID: "1", DepartmentID: "7", Subject: "Synthetic issue", Complete: true, Messages: []ticket.Message{
@@ -126,11 +128,24 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 			if err = db.Save(ctx, raw, snapshot); err != nil {
 				t.Fatal(err)
 			}
+			if success {
+				for _, id := range []string{"2", "3", "4"} {
+					other := snapshot
+					other.ID = id
+					other.Complete = id != "4"
+					if e := db.Save(ctx, raw, other); e != nil {
+						t.Fatal(e)
+					}
+				}
+				if e := db.StopSync(ctx, "3", "ticket confirmed deleted in Zoho"); e != nil {
+					t.Fatal(e)
+				}
+			}
 			conversation, hash, err := analysis.Input(snapshot, raw)
 			if err != nil {
 				t.Fatal(err)
 			}
-			cfg := config.Config{Environment: "development", Port: "8080", SyncInterval: 30 * time.Millisecond, SyncLookback: time.Hour,
+			cfg := config.Config{Environment: "development", Port: "8080", SyncInterval: time.Hour, SyncLookback: time.Hour,
 				Zoho: config.Zoho{BaseURL: external.URL, AccountsURL: external.URL, DepartmentID: "7"},
 				Jev:  config.Model{Enabled: true, Name: "synthetic-jev", Key: "synthetic", URL: external.URL + "/jev"},
 				Bub:  config.Model{Enabled: true, Name: "synthetic:bub", Key: "synthetic", URL: "https://synthetic.invalid"}}
@@ -160,7 +175,7 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 				t.Fatal("automatic Jev request did not start")
 			}
 			for deadline := time.Now().Add(200 * time.Millisecond); time.Now().Before(deadline); {
-				if _, e := os.Stat("captured.json"); e == nil {
+				if _, e := os.Stat("captured-1.json"); e == nil {
 					t.Fatal("Bub started before the first Jev attempt completed")
 				}
 				time.Sleep(5 * time.Millisecond)
@@ -168,7 +183,7 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 			unblock()
 			var captured []byte
 			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
-				captured, err = os.ReadFile("captured.json")
+				captured, err = os.ReadFile("captured-1.json")
 				if err == nil {
 					break
 				}
@@ -218,6 +233,45 @@ print(json.dumps({"ok": True, "returned_model": "synthetic-bub-actual", "result"
 			if err != nil || bub.Success == nil || bub.Stale {
 				t.Fatalf("subprocess result was not saved for its exact input: %+v %v", bub, err)
 			}
+			if success {
+				// With a one-hour Zoho interval, both capabilities must drain the
+				// next complete ticket without waiting for another poll.
+				var state struct {
+					AI map[string]struct {
+						Status   string `json:"status"`
+						Eligible bool   `json:"automatic_eligible"`
+					} `json:"ai"`
+				}
+				read := func(id string) {
+					req := httptest.NewRequest("GET", "/api/tickets/"+id, nil)
+					req.Host = "localhost:8080"
+					w := httptest.NewRecorder()
+					service.Handler().ServeHTTP(w, req)
+					if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &state) != nil {
+						t.Fatal("cannot read ticket state")
+					}
+				}
+				for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+					read("2")
+					if state.AI["jev"].Status == "success" && state.AI["bub"].Status == "success" {
+						break
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if state.AI["jev"].Status != "success" || state.AI["bub"].Status != "success" {
+					t.Fatal("analysis stalled until next sync interval")
+				}
+				for _, id := range []string{"3", "4"} {
+					read(id)
+					if state.AI["jev"].Eligible || state.AI["bub"].Eligible {
+						t.Fatal("stopped/incomplete ticket eligible")
+					}
+					if _, e := os.Stat("captured-" + id + ".json"); !os.IsNotExist(e) {
+						t.Fatal("stopped/incomplete ticket sent to Bub")
+					}
+				}
+			}
+
 		})
 	}
 }

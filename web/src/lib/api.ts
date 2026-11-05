@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单/分析、同步并发/合并停止和调用计数类型、可取消查询和受保护操作。
+// output: 工单号/安全链接、分类与独立紧凑分析状态及调用计数类型、可取消查询和受保护操作。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -39,6 +39,8 @@ export type Ticket = {
 };
 
 export type TicketRecord = Ticket & {
+  ticket_number?: string;
+  web_url?: string;
   pending: boolean;
   sync_stopped: boolean;
   sync_error?: string;
@@ -54,6 +56,7 @@ export type AIState = {
   automatic_eligible?: boolean;
   priority?: string;
   emotion?: string;
+  category?: string;
   error?: string;
 };
 type AICounts = { pending: number; running: number; failed: number; success: number; stale: number };
@@ -136,15 +139,27 @@ export async function postAction(path: string, token: string, signal: AbortSigna
 }
 
 export function aiLabel(value?: AIState): string {
-  const labels = { pending: "待处理", running: "处理中", failed: "失败", success: "已完成", disabled: "已关闭" };
-  if (value?.status === "pending" && value.automatic_eligible === false) return "未纳入自动分析";
-  return value ? labels[value.status] || "状态未知" : "未读取";
+  if (!value) return "未读取";
+  if (value.status === "disabled") return "已关闭";
+  if (value.status === "running") return value.stale ? "更新中" : "处理中";
+  if (value.status === "failed") return value.stale ? "更新失败" : "失败";
+  if (value.stale) return "待更新";
+  if (value.status === "pending") return value.automatic_eligible === false ? "等待同步" : "排队中";
+  return value.status === "success" ? "完成" : "未知";
+}
+
+export function ticketURL(value?: string): string | null {
+  try {
+    const url = new URL(value || "");
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
 }
 
 export type ActionFeedback = { blocked: string; error: string; notice: string };
 
-export function jevChoice(field: "priority" | "emotion", value?: string): string {
+export function jevChoice(field: "priority" | "emotion" | "category", value?: string): string {
   const labels: Record<string, Record<string, string>> = {
+    category: { hardware: "硬件", software: "软件 / 固件", connectivity: "连接", usage: "使用方法", order: "订单", service: "售后服务", other: "其他" },
     priority: { low: "低", normal: "常规", high: "高", urgent: "紧急" },
     emotion: { positive: "积极", neutral: "中性", frustrated: "沮丧 / 焦虑", angry: "愤怒" },
   };

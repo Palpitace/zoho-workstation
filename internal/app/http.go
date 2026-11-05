@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 工单详情、实际输入版本分析状态、同步并发配置、调用计数和受保护操作。
+// output: 工单号/链接、组合筛选、问题分类和实际输入版本分析状态、同步并发配置、调用计数和受保护操作。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
+	"strings"
 	"time"
 	"zoho-workstation/internal/store"
 )
@@ -24,29 +26,39 @@ type AIStatus struct {
 	AutomaticEligible bool   `json:"automatic_eligible"`
 	Priority          string `json:"priority,omitempty"`
 	Emotion           string `json:"emotion,omitempty"`
+	Category          string `json:"category,omitempty"`
 	Error             string `json:"error,omitempty"`
 }
 type ticketView struct {
 	store.Record
-	AI map[string]AIStatus `json:"ai"`
+	AI           map[string]AIStatus `json:"ai"`
+	TicketNumber string              `json:"ticket_number,omitempty"`
+	WebURL       string              `json:"web_url,omitempty"`
 }
+
+// Read display-only identity from retained raw data, including existing snapshots.
+// These fields never enter model inputs or invalidate successful AI results.
+func displayTicket(record store.Record, ai map[string]AIStatus) ticketView {
+	view := ticketView{Record: record, AI: ai}
+	var identity struct {
+		Number json.Number `json:"ticketNumber"`
+		URL    string      `json:"webUrl"`
+	}
+	if json.Unmarshal(record.Raw.Ticket, &identity) == nil {
+		view.TicketNumber = identity.Number.String()
+		if u, err := url.Parse(identity.URL); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil {
+			view.WebURL = identity.URL
+		}
+	}
+	return view
+}
+
 type counts struct {
 	Pending int `json:"pending"`
 	Running int `json:"running"`
 	Failed  int `json:"failed"`
 	Success int `json:"success"`
 	Stale   int `json:"stale"`
-}
-
-func (a *App) eligibleID(id string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, candidate := range a.eligible {
-		if candidate == id {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]AIStatus, map[string]store.AnalysisView, error) {
@@ -67,7 +79,7 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 			return nil, nil, err
 		}
 		views[kind] = view
-		s := AIStatus{Status: "pending", Stale: view.Stale, AutomaticEligible: a.eligibleID(record.ID)}
+		s := AIStatus{Status: "pending", Stale: view.Stale, AutomaticEligible: automaticallyEligible(record)}
 		if view.Current != nil {
 			s.Status = view.Current.Status
 			s.Error = view.Current.Error
@@ -87,6 +99,7 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 			if json.Unmarshal(view.Success.Result, &result) == nil {
 				s.Priority = result.Answers["priority"].Choice
 				s.Emotion = result.Answers["emotion"].Choice
+				s.Category = result.Answers["category"].Choice
 			}
 		}
 		summaries[kind] = s
@@ -121,13 +134,43 @@ func (a *App) Handler() http.Handler {
 	})
 	router.GET("/api/status", a.status)
 	router.GET("/api/tickets", func(c *gin.Context) {
-		records, err := a.db.List(c.Request.Context(), c.Query("q"), c.Query("status"))
+		records, err := a.db.List(c.Request.Context(), "", "")
 		if err != nil {
 			apiError(c, 500, "cannot read tickets")
 			return
 		}
+		statuses, products := map[string]bool{}, map[string]bool{}
+		for _, record := range records {
+			if record.Status != "" {
+				statuses[record.Status] = true
+			}
+			products[record.Product] = true
+		}
+		choices := func(values map[string]bool) []string {
+			result := make([]string, 0, len(values))
+			for value := range values {
+				result = append(result, value)
+			}
+			sort.Strings(result)
+			return result
+		}
 		output := make([]ticketView, 0, len(records))
 		for _, record := range records {
+			if q := c.Query("q"); q != "" && !strings.Contains(strings.ToLower(record.Subject), strings.ToLower(q)) {
+				continue
+			}
+			if status := c.Query("status"); status != "" && record.Status != status {
+				continue
+			}
+			if product := c.Query("product"); product != "" {
+				if product == "__missing__" {
+					if record.Product != "" {
+						continue
+					}
+				} else if record.Product != product {
+					continue
+				}
+			}
 			if !record.Pending {
 				record, err = a.db.Get(c.Request.Context(), record.ID)
 				if err != nil {
@@ -142,9 +185,9 @@ func (a *App) Handler() http.Handler {
 			}
 			record.Messages = nil
 			record.Description = ""
-			output = append(output, ticketView{record, ai})
+			output = append(output, displayTicket(record, ai))
 		}
-		c.JSON(200, gin.H{"data": output})
+		c.JSON(200, gin.H{"data": output, "filters": gin.H{"statuses": choices(statuses), "products": choices(products)}})
 	})
 	router.GET("/api/tickets/:id", func(c *gin.Context) {
 		record, err := a.db.Get(c.Request.Context(), c.Param("id"))
@@ -157,7 +200,7 @@ func (a *App) Handler() http.Handler {
 			apiError(c, 500, "cannot read analysis state")
 			return
 		}
-		c.JSON(200, ticketView{record, ai})
+		c.JSON(200, displayTicket(record, ai))
 	})
 	router.GET("/api/tickets/:id/analysis", func(c *gin.Context) {
 		record, err := a.db.Get(c.Request.Context(), c.Param("id"))
@@ -218,7 +261,11 @@ func (a *App) status(c *gin.Context) {
 		return
 	}
 	totals := map[string]*counts{"jev": {}, "bub": {}}
+	eligibleCount := 0
 	for _, record := range records {
+		if automaticallyEligible(record) {
+			eligibleCount++
+		}
 		if !record.Pending {
 			record, err = a.db.Get(ctx, record.ID)
 			if err != nil {
@@ -249,7 +296,7 @@ func (a *App) status(c *gin.Context) {
 		}
 	}
 	a.mu.Lock()
-	runtime := gin.H{"sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "development", "ai_scope_count": len(a.eligible), "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
+	runtime := gin.H{"sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "all_synced", "ai_scope_count": eligibleCount, "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
 	a.mu.Unlock()
 	c.JSON(200, gin.H{"sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round}})
 }

@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 有界并发同步、可取消退避及独立 Jev/Bub 调度，不按累计次数拦截。
+// output: 有界并发同步、可取消退避及全部有效工单的独立 Jev/Bub 调度，不按累计次数拦截。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -27,13 +27,12 @@ type App struct {
 	zoho            *zoho.Client
 	csrf            string
 	mu              sync.Mutex
-	selectionMu     sync.Mutex
 	ctx             context.Context
 	cancel          context.CancelFunc
 	started, closed bool
 	busy            map[string]bool
 	lastError       map[string]string
-	eligible        []string
+	analysisWake    chan struct{}
 	releases        []func()
 	wg              sync.WaitGroup
 }
@@ -57,7 +56,7 @@ func New(cfg config.Config, db *store.Store, client *zoho.Client) (*App, error) 
 	if cfg.SyncBatchSize < 1 || cfg.SyncBatchSize > 50 || cfg.SyncConcurrency < 1 || cfg.SyncConcurrency > 5 {
 		return nil, errors.New("invalid sync batch size or concurrency")
 	}
-	return &App{cfg: cfg, db: db, zoho: client, csrf: hex.EncodeToString(token[:]), busy: map[string]bool{}, lastError: map[string]string{}}, nil
+	return &App{cfg: cfg, db: db, zoho: client, csrf: hex.EncodeToString(token[:]), busy: map[string]bool{}, lastError: map[string]string{}, analysisWake: make(chan struct{}, 1)}, nil
 }
 
 // Start is called only after the HTTP listener is successfully acquired.
@@ -111,7 +110,6 @@ func (a *App) Close() {
 
 func (a *App) loop() {
 	defer a.wg.Done()
-	a.loadSelection()
 	_ = a.RequestSync()
 	a.scheduleAnalysis()
 	ticker := time.NewTicker(a.cfg.SyncInterval)
@@ -120,6 +118,8 @@ func (a *App) loop() {
 		select {
 		case <-a.ctx.Done():
 			return
+		case <-a.analysisWake:
+			a.scheduleAnalysis()
 		case <-ticker.C:
 			_ = a.RequestSync()
 			a.scheduleAnalysis()
@@ -127,49 +127,9 @@ func (a *App) loop() {
 	}
 }
 
-func (a *App) loadSelection() {
-	a.selectionMu.Lock()
-	defer a.selectionMu.Unlock()
-	body, err := os.ReadFile("data/review/manifest.json")
-	if errors.Is(err, os.ErrNotExist) || len(body) == 0 || string(body) == "[]" {
-		state, e := a.db.State(a.ctx)
-		if e != nil || state.Ready < 20 {
-			return
-		}
-		if e = PrepareInputs(a.ctx, a.db, a.cfg, 20); e != nil {
-			a.setError("analysis", e)
-			return
-		}
-		body, err = os.ReadFile("data/review/manifest.json")
-	}
-	if err != nil {
-		a.setError("analysis", errors.New("cannot read development sample"))
-		return
-	}
-	var manifest []reviewItem
-	if json.Unmarshal(body, &manifest) != nil {
-		a.setError("analysis", errors.New("development sample manifest invalid"))
-		return
-	}
-	ids, err := a.db.IDs(a.ctx)
-	if err != nil {
-		return
-	}
-	allowed := map[string]bool{}
-	for _, id := range ids {
-		allowed[id] = true
-	}
-	selected := []string{}
-	seen := map[string]bool{}
-	for _, item := range manifest {
-		if item.Split == "development" && allowed[item.TicketID] && !seen[item.TicketID] {
-			selected = append(selected, item.TicketID)
-			seen[item.TicketID] = true
-		}
-	}
-	a.mu.Lock()
-	a.eligible = selected
-	a.mu.Unlock()
+// Automatic analysis follows saved business data, not the development manifest.
+func automaticallyEligible(record store.Record) bool {
+	return !record.Pending && !record.SyncStopped && record.Complete
 }
 
 func (a *App) RequestSync() error {
@@ -208,7 +168,6 @@ func (a *App) RequestSync() error {
 			if a.ctx.Err() != nil {
 				return
 			}
-			a.loadSelection()
 			a.scheduleAnalysis()
 			retryAfter := zoho.RetryAfter(err)
 			if result.Remaining == 0 && retryAfter == 0 {
@@ -247,16 +206,21 @@ func (a *App) model(kind string) (config.Model, string, error) {
 }
 
 func (a *App) scheduleAnalysis() {
-	a.mu.Lock()
-	ids := append([]string(nil), a.eligible...)
-	a.mu.Unlock()
+	records, err := a.db.List(a.ctx, "", "")
+	if err != nil {
+		a.setError("analysis", err)
+		return
+	}
 	for _, kind := range []string{"jev", "bub"} {
 		model, _, _ := a.model(kind)
 		if !model.Enabled {
 			continue
 		}
-		for _, id := range ids {
-			started, err := a.startAnalysis(id, kind, false)
+		for _, record := range records {
+			if !automaticallyEligible(record) {
+				continue
+			}
+			started, err := a.startAnalysis(record.ID, kind, false)
 			if errors.Is(err, store.ErrBusy) || started {
 				break
 			}
@@ -364,6 +328,15 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 		saveErr := a.db.FinishAnalysis(finishCtx, run.ID, returned, output, callErr)
 		finishCancel()
 		a.finish(kind, errors.Join(callErr, saveErr))
+		// Wake the coordinator after completion so the next ticket need not
+		// wait for the next Zoho poll. The buffered signal coalesces wakeups.
+		defer func() {
+			select {
+			case a.analysisWake <- struct{}{}:
+			default:
+			}
+		}()
+
 		// A first failure still releases Bub immediately, before any Jev retry.
 		if kind == "jev" && !force && a.cfg.Bub.Enabled && a.ctx.Err() == nil {
 			if _, err := a.startAnalysis(id, "bub", false); err != nil && !errors.Is(err, store.ErrBusy) {
