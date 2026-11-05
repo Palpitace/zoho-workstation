@@ -1,5 +1,5 @@
 // input: 自有目录 AGENTS.md、直接文件索引和代码文件头。
-// output: 缺失目录文档、索引或三行头部的轻量检查结果。
+// output: 兼容 LF/CRLF 的缺失目录文档、索引或三行头部检查结果。
 // pos: 文档结构验证命令。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package main
 
@@ -65,7 +65,7 @@ func main() {
 		if err != nil {
 			return err
 		}
-		lines := strings.Split(string(body), "\n")
+		lines := strings.Split(strings.ReplaceAll(string(body), "\r\n", "\n"), "\n")
 		if len(lines) > 0 && strings.HasPrefix(lines[0], "#!") {
 			lines = lines[1:]
 		}

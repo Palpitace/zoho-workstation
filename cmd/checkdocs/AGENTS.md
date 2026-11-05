@@ -7,4 +7,7 @@
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 检查范围 |
+| main_test.go | 跨平台回归 | LF/CRLF、build tag 与缺失头部的公共命令验证 |
 | main.go | 检查入口 | 轻量文档结构检查 |
+
+头部检查先统一 CRLF 为 LF，再跳过 shebang/build tag/空行，避免 Windows checkout 换行误报；缺失头部仍拒绝。
