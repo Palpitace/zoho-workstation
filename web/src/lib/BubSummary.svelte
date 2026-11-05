@@ -23,6 +23,8 @@
     for (let parent = element.parentElement; parent; parent = parent.parentElement) {
       if (parent instanceof HTMLDetailsElement) parent.open = true;
     }
+    // References identify the whole message, so reveal nested quotations too.
+    for (const quote of element.querySelectorAll<HTMLDetailsElement>("details[data-message-quote]")) quote.open = true;
     element.focus({ preventScroll: true });
     element.scrollIntoView({ block: "start" });
   }
@@ -63,6 +65,7 @@
   {#if loading}<p role="status" class="text-sm text-muted-foreground">正在读取总结…</p>{/if}
   {#if error}<p role="alert" class="text-sm text-destructive">总结暂不可读：{error}</p>{/if}
   {#if failed && view && failureHint(view)}<p class="text-sm text-muted-foreground">{failureHint(view)}</p>{/if}
+  {#if view?.current?.error?.includes("invalid_summary")}<p class="text-sm text-destructive">总结证据校验失败，请核对提示后重试。</p>{/if}
   {#if view?.current?.error}<p role="alert" class="text-sm break-words text-destructive">{view.current.error}</p>{/if}
   {#if view?.stale}<p class="text-sm text-muted-foreground">以下是旧输入或旧配置对应的成功总结，不代表当前会话。</p>
   {:else if view?.success && failed}<p class="text-sm text-muted-foreground">保留上次成功总结，最近失败未覆盖已有结果。</p>{/if}

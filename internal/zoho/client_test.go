@@ -1,5 +1,5 @@
 // input: 合成 Zoho HTTP 响应及隔离 httptest 服务。
-// output: 分页、权限回退、完整线程及计数下界的公开 API 回归证据。
+// output: 超过50条的分组增量及 分页、权限回退、完整线程及计数下界的公开 API 回归证据。
 // pos: 外部 API 边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho_test
 
@@ -58,10 +58,6 @@ func TestRecentPagesAndDepartmentBoundary(t *testing.T) {
 func TestChangedStaysInsideFrozenSample(t *testing.T) {
 	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	until := from.Add(time.Hour)
-	tooMany := make([]string, 51)
-	for i := range tooMany {
-		tooMany[i] = strconv.Itoa(i + 1)
-	}
 	cases := []struct {
 		name, mode, wantError string
 		ids, want             []string
@@ -84,7 +80,6 @@ func TestChangedStaysInsideFrozenSample(t *testing.T) {
 		{name: "local metadata refusal requires complete Fetch", mode: "metadata_forbidden", want: []string{"2"}, searches: 1, details: 2},
 		{name: "global metadata scope refusal remains sanitized", mode: "metadata_denied", wantError: "OAUTH_SCOPE_MISMATCH", searches: 1, details: 2},
 		{name: "metadata server failure remains global", mode: "metadata_server", wantError: "remote HTTP 500", searches: 1, details: 2},
-		{name: "over fifty IDs rejected before reads", ids: tooMany, wantError: "invalid incremental scope"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,6 +317,41 @@ func TestThreadCountIsOnlyAMissingEvidenceGuard(t *testing.T) {
 			raw, err := zoho.New(config.Zoho{BaseURL: remote.URL, AccountsURL: remote.URL, DepartmentID: "7"}, remote.Client()).Fetch(context.Background(), "1")
 			if err != nil || raw.Complete != (count <= 1) {
 				t.Fatalf("count=%d complete=%t err=%v", count, raw.Complete, err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryValidatesPageBeforeAdvancing(t *testing.T) {
+	start := time.Date(2026, 11, 4, 16, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, body string
+		invalid    bool
+	}{
+		{"boundary", `{"data":[{"id":"1","departmentId":"7","createdTime":"2026-11-05T00:00:00+08:00"},{"id":"2","departmentId":"7","createdTime":"2026-11-04T15:59:59Z"}]}`, false},
+		{"department", `{"data":[{"id":"1","departmentId":"8","createdTime":"2026-11-05T00:00:00Z"}]}`, true},
+		{"missing timestamp", `{"data":[{"id":"1","departmentId":"7"}]}`, true},
+		{"wrong ordering", `{"data":[{"id":"1","departmentId":"7","createdTime":"2026-11-04T15:59:59Z"},{"id":"2","departmentId":"7","createdTime":"2026-11-05T00:00:00Z"}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/oauth/v2/token" {
+					fmt.Fprint(w, `{"access_token":"synthetic"}`)
+				} else {
+					fmt.Fprint(w, tc.body)
+				}
+			}))
+			defer server.Close()
+			client := zoho.New(config.Zoho{BaseURL: server.URL, AccountsURL: server.URL, DepartmentID: "7"}, server.Client())
+			ids, next, done, err := client.Discover(context.Background(), start, 25)
+			if tc.invalid {
+				if err == nil || next != 25 || done || len(ids) != 0 {
+					t.Fatalf("unsafe page advanced: %v %d %v %v", ids, next, done, err)
+				}
+				return
+			}
+			if err != nil || len(ids) != 1 || ids[0] != "1" || next != 27 || !done {
+				t.Fatalf("cutoff: %v %d %v %v", ids, next, done, err)
 			}
 		})
 	}

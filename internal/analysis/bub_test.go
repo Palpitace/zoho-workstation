@@ -1,5 +1,5 @@
 // input: 合成 Bub JSON、固定消息引用、隔离子进程及本地模拟代理。
-// output: 整单事实/来源约束、代理继承与凭据隔离、离线环境安全诊断证据。
+// output: 引用诊断路径白名单； 整单事实/来源约束、代理继承与凭据隔离、离线环境安全诊断证据。
 // pos: Python 输出进入 Go 的验证边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis_test
 
@@ -146,5 +146,40 @@ func TestBubOfflineEnvironmentCheck(t *testing.T) {
 		} else if err == nil || !strings.Contains(err.Error(), tc.code) || strings.Contains(err.Error(), "synthetic:private") {
 			t.Fatalf("expected safe %s, got %v", tc.code, err)
 		}
+	}
+}
+
+func TestBubEvidenceDiagnosticPathIsSafe(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("python", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "python/.venv"), "python/.venv"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ location, suffix string }{
+		{`["customer_feedback",0,"message_ids"]`, " at customer_feedback[0].message_ids"},
+		{`["device_info",9,"message_ids"]`, " at device_info[9].message_ids"},
+		{`["synthetic-private",0,"message_ids"]`, ""},
+		{`["customer_feedback",0,"synthetic-private"]`, ""},
+		{`["customer_feedback",1.5,"message_ids"]`, ""},
+		{`["customer_feedback",100000,"message_ids"]`, ""},
+	} {
+		t.Run(tc.location, func(t *testing.T) {
+			body := `{"ok":false,"error":"invalid_summary","diagnostics":[{"code":"missing_reference","loc":` + tc.location + `}]}`
+			script := "print(" + fmt.Sprintf("%q", body) + ")\n"
+			if err := os.WriteFile("python/main.py", []byte(script), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := analysis.Bub(context.Background(), config.Model{Name: "deepseek:synthetic", Key: "synthetic", URL: "https://model.invalid"}, json.RawMessage(`{}`))
+			want := "Bub: invalid_summary (missing_reference)" + tc.suffix
+			if err == nil || err.Error() != want {
+				t.Fatalf("safe error = %v, want %s", err, want)
+			}
+		})
 	}
 }

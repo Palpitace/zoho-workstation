@@ -42,3 +42,5 @@ v4 客户反馈例外：只有单条引用，role=unknown、source=thread、dire
 CheckPython 与 Bub 共用最小进程环境，离线导入真实入口及 SDK，配置密钥不传给该检查；失败返回安全错误，30 秒超时，不回显 Python traceback。
 
 Issue #2：CheckPython 调用固定入口 `--check`，通过实际 HTTPX2 transport 构造检查 SOCKS/代理依赖，解析有界 JSON，仅映射已知错误码到安全恢复提示，不读取凭据或发送请求。Bub 输出白名单增加 proxy_dependency_missing/proxy_configuration_invalid/python_environment_invalid；原始异常仍不回显。离线预检使用与总结相同的代理环境。
+
+Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索引及 message_ids 路径，不含正文/实际消息 ID。Python model_validator 以 ContractIssue 携带本地路径；Go 仅接受三个已知栏目、0..9 整数及固定字段，非法路径省略。界面已有错误文本可显示安全路径，真实性校验不放宽。Prompt 明确 JSON object 不保证引用，无法给出有效来源的事实必须省略，不编造 ID、不自动补引用；无新增内部模型纠错调用、依赖、Schema 升级或旧结果失效。合成测试覆盖缺/未知/角色错误引用、字段证据豁免、准确路径与恶意路径不泄漏。

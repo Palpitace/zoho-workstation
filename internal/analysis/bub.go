@@ -1,5 +1,5 @@
 // input: 完整脱敏会话、显式配置、固定 Python 环境和代理白名单。
-// output: 整单汇总校验、离线代理 transport 检查及安全环境/模型错误。
+// output: 安全栏目/条目诊断； 整单汇总校验、离线代理 transport 检查及安全环境/模型错误。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -145,7 +146,8 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 		Usage         json.RawMessage `json:"usage"`
 		Error         string          `json:"error"`
 		Diagnostics   []struct {
-			Code string `json:"code"`
+			Code string            `json:"code"`
+			Loc  []json.RawMessage `json:"loc"`
 		} `json:"diagnostics"`
 	}
 	if json.Unmarshal(output.Bytes(), &envelope) != nil {
@@ -157,6 +159,14 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 			switch code := envelope.Diagnostics[0].Code; code {
 			case "unknown_reference", "missing_reference", "missing_customer_evidence", "missing_support_evidence", "output_truncated", "blank_output", "unexpected_completion_count", "incomplete_generation", "schema_validation":
 				diagnostic = " (" + code + ")"
+				loc := envelope.Diagnostics[0].Loc
+				if len(loc) == 3 {
+					var section, field string
+					var index int
+					if json.Unmarshal(loc[0], &section) == nil && json.Unmarshal(loc[1], &index) == nil && json.Unmarshal(loc[2], &field) == nil && index >= 0 && index < 10 && field == "message_ids" && (section == "device_info" || section == "customer_feedback" || section == "support_responses") {
+						diagnostic += fmt.Sprintf(" at %s[%d].message_ids", section, index)
+					}
+				}
 			}
 		}
 		switch envelope.Error {

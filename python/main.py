@@ -1,5 +1,5 @@
 # input: stdin 中完整脱敏会话、最小模型配置、Schema 和允许的代理环境。
-# output: 整单事实/引用、安全诊断及无网络代理环境预检，不推断作者身份。
+# output: 引用失败保留安全栏目/条目位置； 整单事实/引用、安全诊断及无网络代理环境预检，不推断作者身份。
 # pos: Go 到无工具 Bub Core 的固定进程入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -53,8 +53,9 @@ CONTRACT_CODES = frozenset({
 
 
 class ContractIssue(ValueError):
-    def __init__(self, code: str):
+    def __init__(self, code: str, location: tuple[str | int, ...] = ()):
         self.code = code
+        self.location = location
         super().__init__(code)
 
 
@@ -63,14 +64,15 @@ def validation_diagnostics(error: ValidationError) -> list[dict[str, Any]]:
     for issue in error.errors(include_url=False, include_input=False)[:16]:
         # An extra_forbidden location can be an arbitrary model-generated key.
         # Preserve known schema paths and bounded indexes, never unknown names.
+        cause = issue.get("ctx", {}).get("error")
+        path = issue.get("loc", ()) + (cause.location if isinstance(cause, ContractIssue) else ())
         location = [
             part if isinstance(part, int) and 0 <= part < 1024
             else part if isinstance(part, str) and part in DIAGNOSTIC_FIELDS
             else "unknown_field"
-            for part in issue.get("loc", ())[:8]
+            for part in path[:8]
         ]
         category = issue["type"] if issue["type"] in DIAGNOSTIC_TYPES else "validation_error"
-        cause = issue.get("ctx", {}).get("error")
         code = cause.code if isinstance(cause, ContractIssue) and cause.code in CONTRACT_CODES else "schema_validation"
         diagnostics.append({"loc": location, "type": category, "code": code})
     return diagnostics
@@ -170,9 +172,10 @@ class Summary(StrictModel):
         snapshot: Snapshot = (info.context or {})["snapshot"]
         messages = {message.id: message for message in snapshot.messages}
         for section in ("device_info", "customer_feedback", "support_responses"):
-            for item in getattr(self, section):
+            for index, item in enumerate(getattr(self, section)):
+                location = (section, index, "message_ids")
                 if not set(item.message_ids).issubset(messages):
-                    raise ContractIssue("unknown_reference")
+                    raise ContractIssue("unknown_reference", location)
                 if not item.message_ids:
                     # A literal ticket field is evidence without inventing a message ID.
                     if section == "device_info" and (
@@ -180,7 +183,7 @@ class Summary(StrictModel):
                         or item.text in snapshot.description
                     ):
                         continue
-                    raise ContractIssue("missing_reference")
+                    raise ContractIssue("missing_reference", location)
                 cited = [messages[mid] for mid in item.message_ids]
                 if section == "customer_feedback" and not any(
                     message.role == "customer" or message.mixed_authors for message in cited
@@ -192,12 +195,12 @@ class Summary(StrictModel):
                         and message.visibility == "public" and message.status == "SUCCESS"
                         and item.text in message.body
                     ):
-                        raise ContractIssue("missing_customer_evidence")
+                        raise ContractIssue("missing_customer_evidence", location)
                 if section == "support_responses" and (
                     not any(message.role == "agent" or message.mixed_authors for message in cited)
                     or any(message.visibility == "private" or message.status.upper() in {"DRAFT", "FAILED", "PENDING"} for message in cited)
                 ):
-                    raise ContractIssue("missing_support_evidence")
+                    raise ContractIssue("missing_support_evidence", location)
         return self
 
 
@@ -219,6 +222,8 @@ text 是连贯的综合摘要，可分短段表达不同问题，但不能拼接
 1. device_info：明确的客户设备型号、版本、连接方式等信息。不可从问题症状、产品类别推断设备参数。
 2. customer_feedback：客户实际反馈的问题、发生条件、否定信息、明确诉求及客户报告的操作和实际结果，按进展合并重复信息。
 3. support_responses：客服已经回复的内容或已经给予的排查建议。只总结已有回复，不新增模型下一步建议。
+JSON object 模式仅保证 JSON 语法，不能替你检查证据。输出前逐项核对：customer_feedback/support_responses 的 message_ids 必须非空，全部来自 input.messages.id 并支持相应结论；不能用数组下标、工单号或虚构 ID 代替。
+无法找到有效来源支持的事实必须省略，不能以空引用输出；无可写事实则对应数组为空。不要为了通过校验编造引用。
 通常每条必须引用支持它的真实消息 ID。device_info 只有来自工单 product/description 字段时可用空 message_ids：
 此时 text 必须逐字等于 product，或逐字摘录 description 中明确设备信息的片段，不能改写、拼接或截去否定/条件从而改变含义。
 客户反馈通常必须有客户发言证据；客服回复必须有客服发言证据。内部备注、草稿、发送失败或等待发送的内容不放入 support_responses，不能当成客户已收到的回复。

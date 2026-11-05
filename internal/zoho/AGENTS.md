@@ -16,9 +16,9 @@
 
 ## 限定 ID 的增量回退
 
-Changed 首选 `/api/v1/tickets/search`，传入已冻结的最多 50 个 ID、固定部门及 modifiedTimeRange。仅该业务 GET 返回 HTTP 403 时切换为逐 ID 的 `/api/v1/tickets/{ticketId}` 检查；其他 HTTP、网络、认证或响应错误继续失败。搜索返回不在固定样本中的 ID 或其他部门也直接拒绝，不回退绕过边界。
+Changed 首选 `/api/v1/tickets/search`，对传入ID每组最多50条分批处理、固定部门及 modifiedTimeRange。仅该业务 GET 返回 HTTP 403 时切换为逐 ID 的 `/api/v1/tickets/{ticketId}` 检查；其他 HTTP、网络、认证或响应错误继续失败。搜索返回不在固定样本中的 ID 或其他部门也直接拒绝，不回退绕过边界。
 
-403 模式只缓存在当前 Client 实例，使用原子标记；首次切换记录一次固定说明、HTTP 状态和样本数量，不含 ID、部门、正文、URL 或密钥。进程重启/新 Client 会重新尝试搜索。模式缓存不是权限升级，也不增加采样 ID 或遍历任何部门列表。
+403 模式只缓存在当前 Client 实例，使用原子标记；首次切换记录一次固定说明、HTTP 状态和样本数量，不含 ID、部门、正文、URL 或密钥。进程重启/新 Client 会重新尝试搜索。模式缓存不是权限升级；新工单列表发现由独立 Discover 负责。
 
 回退依据 OAS `Ticket.json` 的 Get Ticket（Desk.tickets.READ）和 ticketResponse 的 id、departmentId、modifiedTime。省略可选 include，不猜测字段投影参数。接口实际返回工单详情，客户端只提取上述元数据；每张验证返回 ID 和部门，用 RFC3339Nano 解析更新时间，按 `since <= modifiedTime <= until` 选择。OAS 旧示例有毫秒数字，而 schema 为时间字符串；当前遵循已有时间解析契约，不猜测未知格式。
 
@@ -45,3 +45,6 @@ Fetch 对明确 isDeleted 或业务 GET 404/410 额外读取同 ID 的 `/tickets
 依据：OAS TicketHistory.json 的 eventName 包含 TicketMergedChild；[官方 History 接口](https://help.zoho.com/portal/en/kb/desk/developer-space/rest-apis/articles/get-ticket-history-api-explained-in-detail) 明确大小写路径、倒序及 from/limit，官方示例未给出可靠的子工单目标 ID 映射，因此不猜合并目标。真实定向复核的两张旧样本仍是 isDeleted=true、History 404，只能标明确删除，不能宣称已实测合并历史或目标跳转。
 
 Changed 的元数据复核先执行 checkTicket：明确删除即使 modifiedTime 在回查窗之外也进入 Fetch，避免永久漏掉失效状态。测试先在旧实现观察到合并继续报 404、删除被时间窗漏掉，再通过。没有新增配置或数据库结构。
+
+Issue #5：Discover 使用已固定 OAS Ticket.json `/api/v1/tickets` 的 departmentId/from/limit/createdTime；复用既有已核实的 sortBy=-createdTime 降序，OAS枚举只列基础字段，负号契约沿用项目兼容记录，不修改第三方文件。每次最多25条、校验同部门/数字ID/有效创建时间及页内倒序，起点包含、早于起点排除。未知时间或排序违例整页失败，调用方不推进游标。创建时间不猜新增查询参数，本地筛选；返回下一offset与结束标记，持续重扫处理offset位移。
+ChangedKnown 为已完整保存的工单提供更新时间复用；身份/部门/删除校验优先，只有可解析且相等的时间值才跳过重复完整会话。回查搜索命中或403元数据回退都支持，时间未知不跳过；搜索每组50 ID而不是总量50上限。旧Changed入口保留无本地时间对比的语义供显式CLI/既有调用使用。

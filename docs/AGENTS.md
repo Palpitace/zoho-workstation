@@ -22,3 +22,5 @@ Issue #2 的锁定 SOCKS 依赖与预检依据见 compatibility.md，下载版�
 compatibility.md 记录组合筛选 API/前端协同部署及 Combobox 依赖。
 
 downloads.md 补充 Issue #3 环境修复后的人工确认恢复、历史失败时间、一次尝试与重启重新确认规则。
+
+当前 downloads.md 按用户最新边界说明 UTC+8 11月5日起持续发现、无限累计但有冷却的自动重试与展示引用折叠；替代此前人工解除耗尽规则。

@@ -2,7 +2,7 @@
 <!-- output: 组合搜索草稿/已应用条件隔离、五列表头筛选和历史开关、独立页面加载与可见页面定期刷新。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { onMount } from "svelte";
   import { Activity, Inbox, RefreshCw } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import TicketList from "$lib/TicketList.svelte";
@@ -29,13 +29,12 @@
   let listError = $state("");
   let statusError = $state("");
   let detailError = $state("");
-  let revision = $state(0);
   let submitting = $state({ sync: false, jev: false, bub: false });
   let actionErrors = $state({ sync: "", jev: "", bub: "" });
   let notices = $state({ sync: "", jev: "", bub: "" });
   let controller: AbortController | undefined;
   let pollController: AbortController | undefined;
-  let refreshing = false;
+  let refreshing = $state(false);
   let polling = false;
   let appliedSearch = $state<SearchFilters>(defaultSearch());
   const actionRequests = new Map<Operation, AbortController>();
@@ -67,6 +66,11 @@
     controller = new AbortController();
     const signal = controller.signal;
     refreshing = true;
+    const selected = ticketID;
+    const sameTicket = !!selected && detail !== null && encodeURIComponent(detail.id) === selected;
+    if (!sameTicket) { detail = null; jev = null; bub = null; }
+    detailLoading = !!selected && !sameTicket;
+    analysisLoading = !!selected && !jev && !bub;
     loading = !silent;
     const params = new URLSearchParams({ q: appliedSearch.q, field: appliedSearch.field, date_field: appliedSearch.dateField, ...filters, show_history: String(showHistory) });
     for (const [key, date] of [["from", appliedSearch.startDate], ["until", appliedSearch.endDate]]) {
@@ -75,9 +79,11 @@
       if (key === "until") boundary.setDate(boundary.getDate() + 1);
       params.set(key, boundary.toISOString());
     }
-    const [ticketsResult, statusResult] = await Promise.allSettled([
+    const [ticketsResult, statusResult, detailResult, analysisResult] = await Promise.allSettled([
       !ticketID && !statusPage ? getJSON<{ data: TicketRecord[]; filters: FilterOptions }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
       knownStatus ? Promise.resolve(knownStatus) : getJSON<SystemStatus>("/api/status", signal),
+      selected ? getJSON<TicketRecord>(`/api/tickets/${selected}`, signal) : Promise.resolve(null),
+      selected ? getJSON<{ jev: JevView; bub: BubView }>(`/api/tickets/${selected}/analysis`, signal) : Promise.resolve(null),
     ]);
     if (signal.aborted) return;
     if (ticketsResult.status === "fulfilled" && ticketsResult.value) {
@@ -87,8 +93,13 @@
     } else if (ticketsResult.status === "rejected") listError = errorText(ticketsResult.reason);
     if (statusResult.status === "fulfilled") { status = statusResult.value; statusError = ""; }
     else statusError = errorText(statusResult.reason);
-    loading = refreshing = false;
-    revision++;
+    if (selected) {
+      if (detailResult.status === "fulfilled" && detailResult.value) { detail = detailResult.value; detailError = ""; }
+      else if (detailResult.status === "rejected") detailError = `${sameTicket ? "刷新失败，仍显示旧数据。" : ""}${errorText(detailResult.reason)}`;
+      if (analysisResult.status === "fulfilled" && analysisResult.value) { jev = analysisResult.value.jev; bub = analysisResult.value.bub; analysisError = ""; }
+      else if (analysisResult.status === "rejected") analysisError = `${jev || bub ? "刷新失败，仍显示旧分析数据。" : ""}${errorText(analysisResult.reason)}`;
+    }
+    loading = refreshing = detailLoading = analysisLoading = false;
   }
 
   function applySearch() {
@@ -142,32 +153,12 @@
     }
   }
 
-  $effect(() => {
-    const id = ticketID;
-    revision;
-    const sameTicket = untrack(() => detail !== null && encodeURIComponent(detail.id) === id);
-    if (!sameTicket) { detail = null; jev = null; bub = null; }
-    detailError = analysisError = "";
-    if (!id) { detailLoading = analysisLoading = false; return; }
-    const request = new AbortController();
-    detailLoading = !sameTicket;
-    analysisLoading = true;
-    getJSON<TicketRecord>(`/api/tickets/${id}`, request.signal)
-      .then((value) => { if (!request.signal.aborted) detail = value; })
-      .catch((error) => { if (!request.signal.aborted) detailError = errorText(error); })
-      .finally(() => { if (!request.signal.aborted) detailLoading = false; });
-    getJSON<{ jev: JevView; bub: BubView }>(`/api/tickets/${id}/analysis`, request.signal)
-      .then((value) => { if (!request.signal.aborted) { jev = value.jev; bub = value.bub ?? null; } })
-      .catch((error) => { if (!request.signal.aborted) analysisError = errorText(error); })
-      .finally(() => { if (!request.signal.aborted) analysisLoading = false; });
-    return () => request.abort();
-  });
-
   onMount(() => {
     const navigate = () => {
       hash = window.location.hash;
       actionErrors.jev = actionErrors.bub = notices.jev = notices.bub = "";
-      if (!hash.startsWith("#/tickets/") && hash !== "#/status") refresh(true);
+      detailError = analysisError = "";
+      void refresh();
     };
     window.addEventListener("hashchange", navigate);
     document.addEventListener("visibilitychange", poll);
@@ -196,17 +187,18 @@
   <div class="min-w-0">
     <header class="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b px-5 py-3 lg:px-8">
       <span class="text-sm text-muted-foreground">{statusPage ? "运行状态" : ticketID ? "工单 / 详情" : "工单 / 列表"}</span>
-      <div class="flex flex-wrap gap-2">
-        <Button variant="outline" class="h-10" onclick={() => refresh()} disabled={loading || detailLoading}><RefreshCw size={15} aria-hidden="true" />{loading ? "正在刷新…" : "刷新数据"}</Button>
-        <Button class="h-10" onclick={() => operate("sync")} disabled={!!blocked("sync")} title={blocked("sync") || "从 Zoho 只读同步固定工单样本"}>{status?.runtime?.sync_running ? "同步进行中" : submitting.sync ? "正在提交…" : "同步工单"}</Button>
+      <div class="flex flex-wrap items-center gap-2">
+        <span role="status" class="min-h-5 w-24 text-xs text-muted-foreground">{refreshing ? "正在刷新数据…" : ""}</span>
+        <Button variant="outline" class="h-10" onclick={() => { if (!refreshing) void refresh(); }} disabled={refreshing}><RefreshCw size={15} aria-hidden="true" class={refreshing ? "motion-safe:animate-spin" : ""} />刷新数据</Button>
+        <Button class="h-10" onclick={() => operate("sync")} disabled={!!blocked("sync")} title={blocked("sync") || "从 Zoho 只读同步指定部门工单"}>{status?.runtime?.sync_running ? "同步进行中" : submitting.sync ? "正在提交…" : "同步工单"}</Button>
       </div>
     </header>
-    <main id="main-content" tabindex="-1" class="mx-auto max-w-7xl p-5 outline-none lg:p-8">
+    <main aria-busy={refreshing} id="main-content" tabindex="-1" class="mx-auto max-w-7xl p-5 outline-none lg:p-8">
       {#if actionErrors.sync}<p role="alert" class="mb-5 text-sm text-destructive">同步操作：{actionErrors.sync}</p>{/if}
       {#if notices.sync}<p role="status" class="mb-5 text-sm text-muted-foreground">同步操作：{notices.sync}</p>{/if}
       {#if !statusPage && status}
         <dl class="mb-7 flex flex-wrap gap-x-7 gap-y-2 border-b pb-5 text-sm text-muted-foreground">
-          <div class="flex gap-2"><dt>已选取</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.selected}</dd></div>
+          <div class="flex gap-2"><dt>已发现</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.selected}</dd></div>
           <div class="flex gap-2"><dt>已有快照</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.ready}</dd></div>
           <div class="flex gap-2"><dt>待首次保存</dt><dd class="font-medium text-foreground tabular-nums">{Math.max(0, status.sync.selected - status.sync.ready)}</dd></div>
           <div class="flex gap-2"><dt>失败或不完整</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.failed}</dd></div>

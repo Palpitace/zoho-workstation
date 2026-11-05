@@ -35,6 +35,8 @@ type App struct {
 	analysisWake    chan struct{}
 	recovery        map[string]map[string]int64
 	startedAt       string
+	nextSync        time.Time
+	lastSyncResult  syncer.Result
 	releases        []func()
 	wg              sync.WaitGroup
 }
@@ -48,6 +50,9 @@ func New(cfg config.Config, db *store.Store, client *zoho.Client) (*App, error) 
 	}
 	if cfg.SyncInterval <= 0 {
 		return nil, errors.New("sync interval must be positive")
+	}
+	if cfg.SyncStartTime.IsZero() {
+		cfg.SyncStartTime, _ = time.Parse(time.RFC3339, config.DefaultSyncStartTime)
 	}
 	if cfg.SyncBatchSize == 0 {
 		cfg.SyncBatchSize = 9
@@ -89,6 +94,7 @@ func (a *App) Start(ctx context.Context) error {
 	a.ctx, a.cancel = context.WithCancel(ctx)
 	a.started = true
 	a.startedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	a.nextSync = time.Now().Add(a.cfg.SyncInterval)
 	a.wg.Add(1)
 	go a.loop()
 	return nil
@@ -117,13 +123,20 @@ func (a *App) loop() {
 	a.scheduleAnalysis()
 	ticker := time.NewTicker(a.cfg.SyncInterval)
 	defer ticker.Stop()
+	retryTicker := time.NewTicker(30 * time.Second)
+	defer retryTicker.Stop()
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
+		case <-retryTicker.C:
+			a.scheduleAnalysis()
 		case <-a.analysisWake:
 			a.scheduleAnalysis()
-		case <-ticker.C:
+		case tick := <-ticker.C:
+			a.mu.Lock()
+			a.nextSync = tick.Add(a.cfg.SyncInterval)
+			a.mu.Unlock()
 			_ = a.RequestSync()
 			a.scheduleAnalysis()
 		}
@@ -131,7 +144,10 @@ func (a *App) loop() {
 }
 
 // Automatic analysis follows saved business data, not the development manifest.
-func automaticallyEligible(record store.Record) bool {
+func (a *App) automaticallyEligible(record store.Record) bool {
+	if created, err := time.Parse(time.RFC3339Nano, record.CreatedTime); err == nil && created.Before(a.cfg.SyncStartTime) {
+		return false
+	}
 	return !record.Pending && !record.SyncStopped && record.Complete
 }
 
@@ -159,9 +175,10 @@ func (a *App) RequestSync() error {
 		for {
 			started := time.Now()
 			ctx, cancel := context.WithTimeout(a.ctx, 5*time.Minute)
-			result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{SampleSize: 50, MaxTickets: a.cfg.SyncBatchSize, Concurrency: a.cfg.SyncConcurrency, Lookback: a.cfg.SyncLookback})
+			result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{StartTime: a.cfg.SyncStartTime, MaxTickets: a.cfg.SyncBatchSize, Concurrency: a.cfg.SyncConcurrency, Lookback: a.cfg.SyncLookback})
 			cancel()
 			a.mu.Lock()
+			a.lastSyncResult = result
 			a.lastError["sync"] = ""
 			if err != nil {
 				a.lastError["sync"] = err.Error()
@@ -226,7 +243,7 @@ func (a *App) scheduleAnalysis() {
 			}
 		}
 		for _, record := range records {
-			if !automaticallyEligible(record) {
+			if !a.automaticallyEligible(record) {
 				a.mu.Lock()
 				delete(a.recovery[kind], record.ID)
 				a.mu.Unlock()
@@ -309,7 +326,7 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 			return false, err
 		}
 		delete(a.recovery[kind], id)
-		if automaticallyEligible(record) && view.RetryExhausted && view.Current.ID == runID {
+		if a.automaticallyEligible(record) && view.Current != nil && view.Current.Status == "failed" && view.Current.ID == runID {
 			force = true
 		}
 	}

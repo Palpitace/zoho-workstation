@@ -1,5 +1,5 @@
 // input: 合成 Zoho HTTP 服务、可取消请求和隔离 SQLite 文件。
-// output: 初始/增量分批、重启、去重更新及取消不误推进水位的证据。
+// output: 持续发现起始边界/分页恢复及 初始/增量分批、重启、去重更新及取消不误推进水位的证据。
 // pos: 同步编排公开边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer_test
 
@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"zoho-workstation/internal/config"
 	"zoho-workstation/internal/store"
 	"zoho-workstation/internal/syncer"
+	"zoho-workstation/internal/ticket"
 	"zoho-workstation/internal/zoho"
 )
 
@@ -97,9 +99,6 @@ func TestSyncBatchesUpdatesAndCancellation(t *testing.T) {
 				if upper == "" {
 					t.Fatal("batch window not persisted")
 				}
-				if err = db.Reserve(ctx, []string{"4"}); err == nil {
-					t.Fatal("frozen sample expanded")
-				}
 				db.Close()
 				db, err = store.Open(path, "7")
 				if err != nil {
@@ -156,5 +155,128 @@ func TestSyncBatchesUpdatesAndCancellation(t *testing.T) {
 	state, _ = db.State(ctx)
 	if state.Watermark != before.Watermark || state.Failed != 1 || state.BatchUpper == "" {
 		t.Fatal("cancellation lost retry or advanced cursor")
+	}
+}
+
+func TestContinuousDiscoveryPersistsPagesAndFindsLaterArrivals(t *testing.T) {
+	ctx := context.Background()
+	start, _ := time.Parse(time.RFC3339, config.DefaultSyncStartTime)
+	count := 60
+	threadReads := 0
+	failPage := false
+	seenOffsets := []int{}
+	stamp := start.Add(time.Hour).Format(time.RFC3339)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		write := func(v any) { json.NewEncoder(w).Encode(v) }
+		switch {
+		case r.URL.Path == "/oauth/v2/token":
+			write(map[string]string{"access_token": "synthetic"})
+		case r.URL.Path == "/api/v1/tickets":
+			if r.URL.Query().Get("departmentId") != "7" || r.URL.Query().Get("sortBy") != "-createdTime" || r.URL.Query().Get("limit") != "25" {
+				t.Error("unbounded or unscoped discovery")
+			}
+			offset, _ := strconv.Atoi(r.URL.Query().Get("from"))
+			seenOffsets = append(seenOffsets, offset)
+			if failPage && offset == 25 {
+				w.WriteHeader(503)
+				return
+			}
+			rows := []map[string]string{}
+			for i := offset; i < min(offset+25, count+1); i++ {
+				created := start.Add(time.Duration(count-i-1) * time.Minute)
+				if i == count {
+					created = start.Add(-time.Second)
+				}
+				rows = append(rows, map[string]string{"id": strconv.Itoa(count - i + 1), "departmentId": "7", "createdTime": created.Format(time.RFC3339)})
+			}
+			write(map[string]any{"data": rows})
+		case r.URL.Path == "/api/v1/tickets/search":
+			w.WriteHeader(403)
+		case strings.HasSuffix(r.URL.Path, "/threads"), strings.HasSuffix(r.URL.Path, "/comments"):
+			if strings.HasSuffix(r.URL.Path, "/threads") {
+				threadReads++
+			}
+			write(map[string]any{"data": []any{}})
+		default:
+			id := strings.TrimPrefix(r.URL.Path, "/api/v1/tickets/")
+			write(map[string]string{"id": id, "departmentId": "7", "createdTime": stamp, "modifiedTime": stamp, "threadCount": "0", "commentCount": "0"})
+		}
+	}))
+	defer server.Close()
+	client := zoho.New(config.Zoho{BaseURL: server.URL, AccountsURL: server.URL, DepartmentID: "7"}, server.Client())
+	path := filepath.Join(t.TempDir(), "app.db")
+	db, err := store.Open(path, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { db.Close() }()
+	opts := syncer.Options{StartTime: start, MaxTickets: 5}
+	if _, err := syncer.Run(ctx, client, db, opts); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := db.State(ctx)
+	if state.Selected != 25 || state.DiscoveryOffset != 25 || state.Watermark != "" {
+		t.Fatalf("first page state: %+v", state)
+	}
+	failPage = true
+	if _, err := syncer.Run(ctx, client, db, opts); err == nil {
+		t.Fatal("page failure not reported")
+	}
+	state, _ = db.State(ctx)
+	if state.DiscoveryOffset != 25 || state.Watermark != "" {
+		t.Fatal("failed page advanced cursor")
+	}
+	db.Close()
+	db, err = store.Open(path, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failPage = false
+	drain := func() {
+		for i := 0; i < 30; i++ {
+			result, err := syncer.Run(ctx, client, db, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Remaining == 0 {
+				return
+			}
+		}
+		t.Fatal("bounded batches failed to drain")
+	}
+	drain()
+	state, _ = db.State(ctx)
+	rows, _ := db.List(ctx, "", "")
+	if state.Selected != 60 || state.Ready != 60 || len(rows) != 60 || !state.DiscoveryDone || state.Watermark == "" {
+		t.Fatalf("discovery stopped at old sample limit: %+v / %d", state, len(rows))
+	}
+	if _, err := db.Get(ctx, "1"); err == nil {
+		t.Fatal("ticket before cutoff admitted")
+	}
+	if len(seenOffsets) != 4 || seenOffsets[0] != 0 || seenOffsets[1] != 25 || seenOffsets[2] != 25 || seenOffsets[3] != 50 {
+		t.Fatalf("resume offsets %v", seenOffsets)
+	}
+	beforeReads := threadReads
+	count = 61
+	drain()
+	state, _ = db.State(ctx)
+	if threadReads != beforeReads+1 {
+		t.Fatalf("overlap reloaded unchanged conversations: %d -> %d", beforeReads, threadReads)
+	}
+	if state.Selected != 61 || state.Ready != 61 {
+		t.Fatalf("new arrival missing or duplicates: %+v", state)
+	}
+	if err := db.Reserve(ctx, []string{"999"}); err != nil {
+		t.Fatal(err)
+	}
+	old := ticket.Snapshot{ID: "999", DepartmentID: "7", Subject: "Retained old ticket", CreatedTime: start.Add(-time.Hour).Format(time.RFC3339), ModifiedTime: stamp, Complete: true}
+	if err := db.Save(ctx, ticket.RawSnapshot{Ticket: json.RawMessage(`{}`)}, old); err != nil {
+		t.Fatal(err)
+	}
+	beforeReads = threadReads
+	drain()
+	retained, err := db.Get(ctx, "999")
+	if err != nil || retained.Subject != old.Subject || retained.SyncStopped || threadReads != beforeReads {
+		t.Fatal("before-cutoff history was fetched, changed or stopped")
 	}
 }

@@ -74,3 +74,5 @@ Schema 升级使 v4 旧结果过期，新自动运行仍限原开发集；没有
 ## SOCKS 与离线预检（Issue #2）
 
 显式锁定 httpx2[socks]==2.16.0，沿用 SDK 的同一 HTTP 客户端，新增 socksio==1.0.0，不升级其他依赖。依据已安装 wheel 的 Provides-Extra/Requires-Dist 核实 socks extra；uv.lock 固定 Hash。`main.py --check` 不读 stdin/凭据、不发送网络请求，实际构造并关闭 AsyncClient，覆盖继承代理的 transports。正常总结也先检查环境；缺 SOCKS 依赖、非法代理配置、本地证书/环境问题分别返回 proxy_dependency_missing、proxy_configuration_invalid、python_environment_invalid，不打印异常/代理 URL。测试覆盖大小写 ALL_PROXY、仅 SOCKS、与 HTTP(S) 共存、socks5/socks5h、缺模块以及 CLI 安全错误。
+
+Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索引及 message_ids 路径，不含正文/实际消息 ID。Python model_validator 以 ContractIssue 携带本地路径；Go 仅接受三个已知栏目、0..9 整数及固定字段，非法路径省略。界面已有错误文本可显示安全路径，真实性校验不放宽。Prompt 明确 JSON object 不保证引用，无法给出有效来源的事实必须省略，不编造 ID、不自动补引用；无新增内部模型纠错调用、依赖、Schema 升级或旧结果失效。合成测试覆盖缺/未知/角色错误引用、字段证据豁免、准确路径与恶意路径不泄漏。

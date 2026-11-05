@@ -1,5 +1,5 @@
 # input: 合成会话、模型结果、SDK 模拟错误及隔离代理/缺依赖环境。
-# output: 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断的证据。
+# output: 引用失败栏目/条目位置； 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断的证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -171,6 +171,7 @@ class SummaryContractTest(unittest.TestCase):
             with self.subTest(field=field, refs=refs), self.assertRaises(ValidationError) as caught:
                 validate_summary(json.dumps(invalid), snapshot)
             self.assertEqual(validation_diagnostics(caught.exception)[0]["code"], expected)
+            self.assertEqual(validation_diagnostics(caught.exception)[0]["loc"], [field, 0, "message_ids"])
         for section in ("customer_feedback", "support_responses"):
             fragmented = copy.deepcopy(summary)
             fragmented[section] *= 2

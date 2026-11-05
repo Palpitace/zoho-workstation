@@ -5,6 +5,7 @@ package app_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -30,6 +31,8 @@ func TestAutomaticAnalysisRecoveryAndProtectedOperations(t *testing.T) {
 		switch r.URL.Path {
 		case "/oauth/v2/token":
 			fmt.Fprint(w, `{"access_token":"synthetic"}`)
+		case "/api/v1/tickets":
+			fmt.Fprint(w, `{"data":[]}`)
 		case "/api/v1/tickets/1":
 			syncs.Add(1)
 			w.WriteHeader(503)
@@ -118,8 +121,23 @@ func TestAutomaticAnalysisRecoveryAndProtectedOperations(t *testing.T) {
 			Success int `json:"success"`
 		} `json:"ai"`
 	}
+	fixture, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	aged := false
 	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
+		// Simulate time passing in persisted failure history; production cooldown remains real.
+		if !aged {
+			result, err := fixture.Exec("UPDATE ai_runs SET completed_at=? WHERE status='failed'", time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano))
+			if err != nil {
+				t.Fatal(err)
+			}
+			count, _ := result.RowsAffected()
+			aged = count > 0
+		}
 		json.Unmarshal(call("GET", "/api/status", "", "").Body.Bytes(), &status)
 		if status.AI["jev"].Success == 1 {
 			break

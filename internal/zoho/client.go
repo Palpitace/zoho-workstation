@@ -1,5 +1,5 @@
 // input: Zoho OAuth 配置、限定部门与调用方 context。
-// output: 完整只读会话、固定 ID 复核、失效元数据复核及安全限流诊断。
+// output: 有界创建时间发现与分批增量； 完整只读会话、固定 ID 复核、失效元数据复核及安全限流诊断。
 // pos: Zoho HTTP 与本地采样的边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho
 
@@ -203,10 +203,26 @@ func (c *Client) Recent(ctx context.Context, limit int) ([]string, error) {
 // Changed prefers documented search; a search 403 switches only this client's
 // fixed sample to individual ticket metadata checks, never a history scan.
 func (c *Client) Changed(ctx context.Context, ids []string, since, until time.Time) ([]string, error) {
+	return c.ChangedKnown(ctx, ids, since, until, nil)
+}
+
+// ChangedKnown avoids reloading complete conversations whose verified metadata time is unchanged.
+func (c *Client) ChangedKnown(ctx context.Context, ids []string, since, until time.Time, known map[string]string) ([]string, error) {
 	if len(ids) == 0 {
 		return []string{}, nil
 	}
-	if len(ids) > 50 || until.Before(since) {
+	if len(ids) > 50 {
+		var changed []string
+		for offset := 0; offset < len(ids); offset += 50 {
+			part, err := c.ChangedKnown(ctx, ids[offset:min(offset+50, len(ids))], since, until, known)
+			if err != nil {
+				return nil, err
+			}
+			changed = append(changed, part...)
+		}
+		return changed, nil
+	}
+	if until.Before(since) {
 		return nil, errors.New("invalid incremental scope")
 	}
 	allowed := map[string]bool{}
@@ -217,7 +233,7 @@ func (c *Client) Changed(ctx context.Context, ids []string, since, until time.Ti
 		allowed[id] = true
 	}
 	if c.searchDenied.Load() {
-		return c.changedMetadata(ctx, ids, since, until)
+		return c.changedMetadata(ctx, ids, since, until, known)
 	}
 	changed := []string{}
 	seen := map[string]bool{}
@@ -233,7 +249,7 @@ func (c *Client) Changed(ctx context.Context, ids []string, since, until time.Ti
 				if c.searchDenied.CompareAndSwap(false, true) {
 					slog.WarnContext(ctx, "Zoho search access denied; using fixed-ID ticket metadata checks", "http_status", http.StatusForbidden, "sample_size", len(allowed))
 				}
-				return c.changedMetadata(ctx, ids, since, until)
+				return c.changedMetadata(ctx, ids, since, until, known)
 			}
 			return nil, err
 		}
@@ -248,7 +264,9 @@ func (c *Client) Changed(ctx context.Context, ids []string, since, until time.Ti
 				return nil, errors.New("incremental response exceeded fixed sample")
 			}
 			if !seen[id] {
-				changed = append(changed, id)
+				if c.checkTicket(row, id) != nil || !sameModifiedTime(field(row, "modifiedTime"), known[id]) {
+					changed = append(changed, id)
+				}
 				seen[id] = true
 				added++
 			}
@@ -260,7 +278,7 @@ func (c *Client) Changed(ctx context.Context, ids []string, since, until time.Ti
 					missing = append(missing, id)
 				}
 			}
-			rechecked, err := c.changedMetadata(ctx, missing, since, until)
+			rechecked, err := c.changedMetadata(ctx, missing, since, until, known)
 			if err != nil {
 				return nil, err
 			}
@@ -273,7 +291,7 @@ func (c *Client) Changed(ctx context.Context, ids []string, since, until time.Ti
 	return nil, errors.New("incremental pagination exceeded documented bound")
 }
 
-func (c *Client) changedMetadata(ctx context.Context, ids []string, since, until time.Time) ([]string, error) {
+func (c *Client) changedMetadata(ctx context.Context, ids []string, since, until time.Time, known map[string]string) ([]string, error) {
 	changed := []string{}
 	seen := map[string]bool{}
 	for _, id := range ids {
@@ -302,6 +320,9 @@ func (c *Client) changedMetadata(ctx context.Context, ids []string, since, until
 		modified, err := time.Parse(time.RFC3339Nano, field(body, "modifiedTime"))
 		if err != nil {
 			changed = append(changed, id)
+			continue
+		}
+		if sameModifiedTime(field(body, "modifiedTime"), known[id]) {
 			continue
 		}
 		if !modified.Before(since) && !modified.After(until) {
@@ -483,4 +504,52 @@ func field(body json.RawMessage, key string) string {
 		return n.String()
 	}
 	return ""
+}
+
+// Discover reads one bounded newest-first page, stopping at the configured creation cutoff.
+// Repeated full passes catch offset shifts caused by arrivals, deletions and merges.
+func (c *Client) Discover(ctx context.Context, since time.Time, offset int) ([]string, int, bool, error) {
+	if offset < 0 || since.IsZero() {
+		return nil, offset, false, errors.New("invalid discovery boundary")
+	}
+	body, err := c.get(ctx, "/tickets", url.Values{"departmentId": {c.cfg.DepartmentID}, "sortBy": {"-createdTime"}, "from": {strconv.Itoa(offset)}, "limit": {"25"}})
+	if err != nil {
+		return nil, offset, false, err
+	}
+	rows, err := list(body)
+	if err != nil {
+		return nil, offset, false, err
+	}
+	if len(rows) > 25 {
+		return nil, offset, false, errors.New("discovery page exceeded requested limit")
+	}
+	ids := []string{}
+	done := len(rows) < 25
+	var previous time.Time
+	for _, row := range rows {
+		id := field(row, "id")
+		created, err := time.Parse(time.RFC3339Nano, field(row, "createdTime"))
+		if err != nil || !idPattern.MatchString(id) || field(row, "departmentId") != c.cfg.DepartmentID {
+			return nil, offset, false, errors.New("discovery identity, department or creation time invalid")
+		}
+		if !previous.IsZero() && created.After(previous) {
+			return nil, offset, false, errors.New("discovery creation ordering invalid")
+		}
+		previous = created
+		if created.Before(since) {
+			done = true
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, offset + len(rows), done, nil
+}
+
+func sameModifiedTime(remote, saved string) bool {
+	a, err := time.Parse(time.RFC3339Nano, remote)
+	if err != nil {
+		return false
+	}
+	b, err := time.Parse(time.RFC3339Nano, saved)
+	return err == nil && a.Equal(b)
 }

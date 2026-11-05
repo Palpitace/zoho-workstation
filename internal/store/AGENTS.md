@@ -1,6 +1,6 @@
 一旦我所属的文件夹有所变化请更新我。
 
-负责 Go 独占的 SQLite 访问、样本/调用计数及同库操作锁。
+负责 Go 独占的 SQLite 访问、工单/发现游标/调用计数及同库操作锁。
 保存原始证据、规范化快照与分析状态，向编排及查询 API 提供数据。
 不发网络请求、不创建通知或通用任务队列。
 
@@ -12,6 +12,7 @@
 | lock_unix.go | 平台锁 | Linux/macOS 非阻塞 Flock |
 | lock_windows.go | 平台锁 | Windows 非阻塞 LockFileEx |
 | analysis.go | 分析记录 | 输入版本、本地校验失败、成功结果与调用计数 |
+| retry_test.go | 持续重试验证 | 持久冷却、无累计上限、重启和输入隔离 |
 | analysis_test.go | AI 存储测试 | 版本隔离、invalid 不计费、恢复、不限额计数及操作锁 |
 
 ai_runs 每次网络尝试先持久记录再发送，按工单、能力、输入 Hash、Schema 和模型读取当前结果；旧输入完成不会覆盖新输入。失败保留已有成功行，结果与当前输入不符时标记过期。
@@ -26,7 +27,7 @@ Store.Lock 仅允许 `sync`、`analysis`，使用 Open 解析过符号链接的�
 Get 单次查询同时读取原始/规范化快照，避免并发同步时混用两份版本来脱敏；Record.Raw 明确 json:"-"，不会进入前端。详情同时返回 sync_error/checked_at/sync_stopped，列表与详情使用相同同步状态。
 已保留但未保存快照的 ID 返回 pending=true，不编造正文；分析编排必须拒绝 pending 输入。样本外 ID 仍返回 sql.ErrNoRows。
 
-初次 Reserve 在事务中固定最多 50 个唯一 ID；失败、停止和重启不释放名额。原始与规范化 JSON 分列原子保存。sync_state.batch_upper 固定可恢复批次时间，tickets.checked_at 保存最近尝试时间；Failure 保留旧快照，syncer 据此独立冷却重试。
+Reserve 在事务中幂等追加工单ID，不限累计数量；旧 frozen 字段仅为旧数据库兼容保留，已不再读写该字段决定业务范围。原始与规范化 JSON 分列原子保存。sync_state.batch_upper 固定可恢复批次时间，tickets.checked_at 保存最近尝试时间；Failure 保留旧快照，syncer 据此独立冷却重试。
 
 仅成功确认工单已合并、删除或移出部门才调用 StopSync(ctx,id,reason)：sync_stopped=true、固定安全说明和 checked_at 原子写入，保留快照与 AI 历史，Save 拒绝覆盖已停止记录。Get/List 同时返回停止状态；State.Failed 只统计可重试错误，停止原因仍在列表/详情可见。
 
@@ -39,3 +40,9 @@ Bub→Jev 调度仅使用当前成功结果；已移除无业务消费者的 Has
 SQLite file URI 使用正斜杠与 Windows 盘符前缀斜杠，实际锁文件仍使用规范化原生路径，支持解压目录中的空格。
 
 Analysis 在原有历史扫描中计算当前签名的失败次数与最近失败时间，不额外查表。retry_exhausted 只对最新 failed 且失败累计至少两次返回 true；最新 running/success 或输入/Schema/模型改变均不显示旧耗尽。last_failed_at 保留便于追溯，不修改历史，不引入部署版本或自动重置重试计数。
+
+## 当前自动重试规则（替代上文累计两次后停止的旧规则）
+
+用户取消 Jev/Bub 累计失败上限。StartAnalysis 在同签名 running/success/invalid 时仍去重；普通失败按持久 completed_at 和失败次数计算 1、2、4、8、16、30 分钟冷却，之后每 30 分钟继续，重启不清零。Analysis 返回 next_retry_at，不再返回 retry_exhausted；有当前成功缓存的手动失败不重复自动调用。手动 force 可提前重试但不能重叠。retry_test.go 以合成数据库时间前移验证超过两次后继续、退避上限和重启/新输入隔离。
+
+Issue #5：List 移除固定 LIMIT 50，Reserve 移除冻结及累计上限。新增 sync_state.discovery_cycle/start/offset/done 为幂等非破坏性列迁移；SaveDiscovery 原子保存已校验的页ID和分页位置，不删除工单或AI历史。State 公开发现位置/完成标记以及完整有效数量complete、停止数量stopped，ready仍为已保存快照总数。创建日期与部门验证在Zoho层完成，存储仅负责原子性。新增周期重扫、失败不推进以及60张跨重启验证在syncer公开集成测试覆盖，不另重复实现数据库专用测试套件。

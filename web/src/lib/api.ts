@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单/筛选契约、重试耗尽与恢复候选、带防护的同源请求能力。
+// output: 工单/筛选契约、自动退避与提前重试候选、带防护的同源请求能力。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -38,7 +38,10 @@ export type Ticket = {
   warnings?: string[];
 };
 
+export type MessageSegment = { text?: string; quote?: boolean; children?: MessageSegment[] };
+
 export type TicketRecord = Ticket & {
+  message_segments?: Record<string, MessageSegment[]>;
   ticket_number?: string;
   web_url?: string;
   first_incoming_time?: string;
@@ -56,7 +59,7 @@ export type AIState = {
   status: "waiting" | "pending" | "running" | "failed" | "success" | "disabled";
   stale: boolean;
   automatic_eligible?: boolean;
-  retry_exhausted?: boolean;
+  next_retry_at?: string;
   last_failed_at?: string;
   failure_before_start?: boolean;
   waiting_reason?: string;
@@ -65,7 +68,7 @@ export type AIState = {
   category?: string;
   error?: string;
 };
-type AICounts = { pending: number; running: number; failed: number; success: number; stale: number; retry_exhausted?: number };
+type AICounts = { pending: number; running: number; failed: number; success: number; stale: number; retry_waiting?: number };
 
 export type RetryCandidate = { ticket_id: string; run_id: number };
 
@@ -73,6 +76,8 @@ export type SystemStatus = {
   retry_candidates?: Record<AIKind, RetryCandidate[]>;
   sync: {
     department_id: string;
+    discovery_offset?: number;
+    discovery_done?: boolean;
     selected: number;
     ready: number;
     failed: number;
@@ -87,6 +92,10 @@ export type SystemStatus = {
   csrf_token: string;
   runtime: {
     sync_running: boolean;
+    sync_start_time?: string;
+    next_sync_at?: string;
+    stopped_count?: number;
+    last_sync_batch?: { fetched: number; failed: number; stopped: number; remaining: number };
     jev_running: boolean;
     bub_running: boolean;
     automatic: boolean;
@@ -117,7 +126,7 @@ export type AnalysisRun<Result> = {
   result?: Result;
 };
 
-type AnalysisView<Result> = { current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub"; waiting_reason?: string; retry_exhausted?: boolean; last_failed_at?: string; failure_before_start?: boolean };
+type AnalysisView<Result> = { current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub"; waiting_reason?: string; next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean };
 export type JevView = AnalysisView<{ model: string; answers: Record<string, { type: string; choice: string }> }>;
 
 type SummaryFact = { text: string; message_ids: string[] };
@@ -154,7 +163,7 @@ export function aiLabel(value?: AIState): string {
   if (value.status === "disabled") return "已关闭";
   if (value.status === "waiting") return "等待总结";
   if (value.status === "running") return value.stale ? "更新中" : "处理中";
-  if (value.status === "failed" && value.retry_exhausted) return "需重试";
+  if (value.status === "failed" && value.next_retry_at) return "等待重试";
   if (value.status === "failed") return value.stale ? "更新失败" : "失败";
   if (value.stale) return "待更新";
   if (value.status === "pending") return value.automatic_eligible === false ? "等待同步" : "排队中";
@@ -204,8 +213,8 @@ export function syncLabel(record: TicketRecord): string {
   return filterLabel("sync_status", record.sync_status || "");
 }
 
-export function failureHint(value: { retry_exhausted?: boolean; last_failed_at?: string; failure_before_start?: boolean }): string {
-  const retry = value.retry_exhausted ? "自动重试已耗尽，需要人工重试。" : "";
+export function failureHint(value: { next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean }): string {
+  const retry = value.next_retry_at ? `自动重试时间：${dateTime(value.next_retry_at)}。` : "";
   const time = value.last_failed_at ? `${value.failure_before_start ? "本次启动前的历史失败" : "最近失败"}：${dateTime(value.last_failed_at)}。` : "";
   return retry + time;
 }

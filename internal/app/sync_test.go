@@ -1,5 +1,5 @@
 // input: 合成 Zoho 接口、隔离数据库、显式串行批次及长周期配置。
-// output: 首轮批次自动接续、失败/限流等待及可取消关闭的行为证据。
+// output: 持续发现下的 首轮批次自动接续、失败/限流等待及可取消关闭的行为证据。
 // pos: 同步调度生命周期回归测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -36,7 +36,7 @@ func TestSyncDrainsBatchesAndCancelsBackoff(t *testing.T) {
 					}
 					rows := []map[string]string{}
 					for i := 1; i <= 7; i++ {
-						rows = append(rows, map[string]string{"id": fmt.Sprint(i), "departmentId": "7"})
+						rows = append(rows, map[string]string{"id": fmt.Sprint(i), "departmentId": "7", "createdTime": stamp})
 					}
 					json.NewEncoder(w).Encode(map[string]any{"data": rows})
 				case strings.HasSuffix(r.URL.Path, "/threads") || strings.HasSuffix(r.URL.Path, "/comments"):

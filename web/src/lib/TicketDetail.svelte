@@ -1,5 +1,5 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 真实工单号链接、紧凑详情、明确合并/删除/移出状态及角色背景色、独立引用导航和折叠倒序会话。 -->
+<!-- output: 消息内历史引用独立折叠； 真实工单号链接、紧凑详情、明确合并/删除/移出状态及角色背景色、独立引用导航和折叠倒序会话。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
@@ -7,6 +7,7 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
   import { dateTime, syncLabel, ticketURL, type Message, type TicketRecord, type JevView, type BubView, type AIKind, type ActionFeedback } from "./api";
+  import MessageBody from "./MessageBody.svelte";
   import JevAssessment from "./JevAssessment.svelte";
   import BubSummary from "./BubSummary.svelte";
 
@@ -38,14 +39,15 @@
 
 <section class="space-y-6" aria-label="工单详情" aria-busy={loading}>
   <Button href="#/tickets" variant="ghost" class="-ml-3 h-10"><ArrowLeft size={16} aria-hidden="true" />返回工单列表</Button>
-  {#if loading}
+  {#if error && ticket}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
+  {#if loading && !ticket}
     <p role="status" class="py-12 text-muted-foreground">正在读取工单详情…</p>
   {:else if ticket?.pending}
     <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">{displayNumber}</h1>
     <Badge variant={ticket.sync_error && !ticket.sync_stopped ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
     <p class="text-muted-foreground">{ticket.sync_stopped ? `${stopReason}，停止拉取新内容；尚无此前保存的详情。` : "这张工单已进入采样范围，详情尚未保存。"}</p>
     {#if ticket.sync_error && !ticket.sync_stopped}<p role="alert" class="text-sm text-destructive">{ticket.sync_error}</p>{/if}
-  {:else if error}
+  {:else if error && !ticket}
     <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">无法读取工单</h1>
     <p role="alert" class="text-sm text-destructive">{error}</p>
   {:else if ticket}
@@ -114,7 +116,7 @@
               <time datetime={message.created_time} class="text-muted-foreground tabular-nums sm:ml-auto">{dateTime(message.created_time)}</time>
             </header>
             {#if message.mixed_authors}<p class="mb-3 text-xs leading-relaxed text-muted-foreground">这段聊天可能包含双方发言，不能整体视为单一客户的陈述。</p>{/if}
-            <p class="max-w-4xl text-sm leading-7 whitespace-pre-wrap break-words">{message.body || "正文为空或未返回。"}</p>
+            <MessageBody segments={ticket.message_segments?.[`${message.source}:${message.id}`] || [{ text: message.body || "正文为空或未返回。" }]} />
             {#if message.attachments?.length}
               <ul aria-label="附件元数据" class="mt-4 space-y-2 text-xs text-muted-foreground">
                 {#each message.attachments as attachment}

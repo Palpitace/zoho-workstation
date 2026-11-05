@@ -1,5 +1,5 @@
 // input: 临时 SQLite 文件和合成工单。
-// output: 样本/快照/额度保留、幂等更新及非破坏性迁移的验证。
+// output: 允许追加新工单； 样本/快照/额度保留、幂等更新及非破坏性迁移的验证。
 // pos: 数据持久化行为测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store_test
 
@@ -60,8 +60,8 @@ func TestSampleAndSnapshotSurviveRestart(t *testing.T) {
 	if err != nil || got.Status != "Reopened" {
 		t.Fatal("failure erased successful snapshot")
 	}
-	if err = db.Reserve(ctx, []string{"3"}); err == nil {
-		t.Fatal("frozen sample silently expanded")
+	if err = db.Reserve(ctx, []string{"3"}); err != nil {
+		t.Fatal("continuous discovery cannot add a new ticket")
 	}
 	if other, err := store.Open(path, "8"); err == nil {
 		other.Close()

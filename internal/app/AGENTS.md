@@ -11,6 +11,9 @@
 | analysis_test.go | 恢复测试 | 互斥分析避免误恢复活动请求 |
 | app.go | 生命周期 | 同步批次/退避、全部有效工单分析及完成唤醒 |
 | recovery.go | 显式恢复 | 校验用户确认的运行 ID，向原调度器提供一次恢复机会 |
+| display_messages.go | 展示派生 | 从保留 HTML/正文识别邮件引用分段，不改变证据和 Hash |
+| display_messages_test.go | 引用验证 | 多段/嵌套、多语言文本、歧义回退及文本安全 |
+| http_recovery_test.go | HTTP 回归 | invalid 排除恢复候选、引用分段仅供详情 |
 | http.go | 同源 API | 工单号/链接、组合筛选、分类/独立分析状态及受保护操作 |
 | list.go | 列表查询 | 字段/日期/表头筛选、来信时间与稳定计数 |
 | list_test.go | 列表回归 | 旧快照真实身份、筛选选项稳定、分类和独立过期状态 |
@@ -66,3 +69,11 @@ AnalysisView / AIStatus 返回 retry_exhausted、last_failed_at；仅当前签�
 GET /api/status 返回 retry_candidates（按能力、有效工单的 ticket_id/run_id）及耗尽数量，runtime.recovery_pending 表示未开始的已确认项。POST /api/analysis/:kind/retry 必须同源/CSRF，JSON candidates 限 1–50 项，全部校验当前有效快照/输入版本/失败运行 ID 后原子接受；失效确认返回 409，不扩大候选集合。Bub 先离线预检，失败返回 503、不增加次数。
 确认只进入 App 内存映射，由既有 scheduleAnalysis/startAnalysis 和 analysisWake 消费；每能力仍一个请求，不另建队列/表/调度器。实际开始前再次验证运行 ID/输入，改变、停止或无效的候选撤销授权，正常新输入分析仍遵守原规则。每个确认项只 force 一次，再失败仍受历史两次失败限制，不自动循环；复用当前成功、保留全部尝试历史。重启丢弃未开始的确认项，用户重新确认；已有 running 仍按原中断恢复规则处理。单票手动重跑保持可用。
 reference_test 通过公共 HTTP/App/Store 与合成 Python 进程验证：历史两次失败→重启显示耗尽→本地环境失败零计数→确认补一次、重复/旧确认拒绝→再次失败不循环→修复后重确认成功并接续 Jev→重启不重复成功。
+
+Issue #7：ticketView.message_segments 以 source:id 为键，仅详情展示消费，原 Message.body/RawSnapshot/持久化和 AI Hash 不变，老数据库无需迁移。HTML 优先识别 blockquote、gmail_quote/gmail_quote_container、divRplyFwdMsg、zmail_extra、yahoo_quoted；复用 ticket.Normalize 转纯文本后在已有正文中精确匹配，重复歧义或不一致保持原样，嵌套结构保留。原始 HTML、脚本、事件属性和链接均不返回/执行。纯文本只折叠明确 > 前缀（支持嵌套）；多语言写道和转发头不独自证明余下均属引用，无法确认的无前缀内容保持可见。分段文本拼接与保存 body 完全一致。
+
+## 当前执行规则：Issue #4–#7（替代固定样本/耗尽规则）
+
+服务传入 Config.SyncStartTime，默认 2026-11-05T00:00:00+08:00，按创建时间持续发现同部门工单；不再冻结 50 个 ID，已有数据保留。CLI sample 的显式单次采样仍可用。runtime 返回起点、下次定时调度、最近批次保存/失败/停止/剩余数与停止总数；State 包含持久发现分页进度。
+自动分析独立每 30 秒检查到期任务，并复用完成唤醒；移除累计两次失败的永久停止，按 Store.next_retry_at 退避，保留单能力并发、超时、缓存、invalid 输入拒绝及历史。人工批量入口改为“立即重试失败的”，确认固定运行 ID，可提前一次尝试；再次失败回到退避，不需要人工恢复才能自动继续，不受 50 个候选限制（HTTP 体积有界）。
+AIStatus/AnalysisView 返回 next_retry_at，统计 retry_waiting；不再返回 retry_exhausted。Jev 无当前 Bub 成功总结仍等待，失败原因不伪装为未知低风险。reference_test 用人工提前尝试生成第二次历史失败，不等待真实冷却时间。

@@ -1,5 +1,5 @@
 // input: SQLite 路径、固定部门和原始/规范化工单快照。
-// output: 持久化样本、失败/删除/部门停止状态与同步水位，以及同库操作锁。
+// output: 无总量上限的工单、持久分页发现进度、同步水位及同库操作锁。
 // pos: Go 独占数据库边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -27,14 +27,20 @@ type Store struct {
 }
 
 type State struct {
-	DepartmentID string `json:"department_id"`
-	Selected     int    `json:"selected"`
-	Ready        int    `json:"ready"`
-	Failed       int    `json:"failed"`
-	Watermark    string `json:"watermark"`
-	BatchUpper   string `json:"batch_upper,omitempty"`
-	LastAttempt  string `json:"last_attempt"`
-	LastError    string `json:"last_error,omitempty"`
+	Complete        int    `json:"complete"`
+	Stopped         int    `json:"stopped"`
+	DiscoveryCycle  string `json:"discovery_cycle,omitempty"`
+	DiscoveryStart  string `json:"discovery_start,omitempty"`
+	DiscoveryOffset int    `json:"discovery_offset"`
+	DiscoveryDone   bool   `json:"discovery_done"`
+	DepartmentID    string `json:"department_id"`
+	Selected        int    `json:"selected"`
+	Ready           int    `json:"ready"`
+	Failed          int    `json:"failed"`
+	Watermark       string `json:"watermark"`
+	BatchUpper      string `json:"batch_upper,omitempty"`
+	LastAttempt     string `json:"last_attempt"`
+	LastError       string `json:"last_error,omitempty"`
 }
 
 func Open(path, department string) (*Store, error) {
@@ -103,6 +109,19 @@ func Open(path, department string) (*Store, error) {
 			return nil, err
 		}
 	}
+	for name, definition := range map[string]string{"discovery_cycle": "TEXT NOT NULL DEFAULT ''", "discovery_start": "TEXT NOT NULL DEFAULT ''", "discovery_offset": "INTEGER NOT NULL DEFAULT 0", "discovery_done": "INTEGER NOT NULL DEFAULT 0"} {
+		var exists int
+		if err = db.QueryRow("SELECT count(*) FROM pragma_table_info('sync_state') WHERE name=?", name).Scan(&exists); err != nil {
+			db.Close()
+			return nil, err
+		}
+		if exists == 0 {
+			if _, err = db.Exec("ALTER TABLE sync_state ADD COLUMN " + name + " " + definition); err != nil {
+				db.Close()
+				return nil, err
+			}
+		}
+	}
 	var hasStopped int
 	if err = db.QueryRow("SELECT count(*) FROM pragma_table_info('tickets') WHERE name='sync_stopped'").Scan(&hasStopped); err != nil {
 		db.Close()
@@ -155,49 +174,25 @@ func (s *Store) Lock(operation string) (func(), error) {
 	}, nil
 }
 
-// Reserve freezes the sample before any detail reads; retries cannot replace failed IDs.
+// Reserve durably adds IDs before detail reads; existing records and history stay intact.
 func (s *Store) Reserve(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	unique := map[string]bool{}
 	for _, id := range ids {
 		if id == "" {
-			return errors.New("sample ID missing")
+			return errors.New("ticket ID missing")
 		}
-		unique[id] = true
-	}
-	if len(unique) > 50 {
-		return errors.New("sample exceeds cumulative limit of 50")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var frozen bool
-	if err = tx.QueryRowContext(ctx, "SELECT frozen FROM sync_state WHERE id=1").Scan(&frozen); err != nil {
-		return err
-	}
-	if frozen {
-		for id := range unique {
-			var found int
-			if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM tickets WHERE id=?", id).Scan(&found); err != nil {
-				return err
-			}
-			if found == 0 {
-				return errors.New("sample is frozen; existing IDs must be reused")
-			}
-		}
-		return nil
-	}
 	for _, id := range ids {
 		if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO tickets(id,selected_at) VALUES(?,?)", id, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE sync_state SET frozen=1 WHERE id=1"); err != nil {
-		return err
 	}
 	return tx.Commit()
 }
@@ -275,7 +270,7 @@ type Record struct {
 }
 
 func (s *Store) List(ctx context.Context, query, status string) ([]Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at,sync_stopped FROM tickets WHERE (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id LIMIT 50`, query, query, status, status)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at,sync_stopped FROM tickets WHERE (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id`, query, query, status, status)
 	if err != nil {
 		return nil, err
 	}
@@ -300,10 +295,12 @@ func (s *Store) List(ctx context.Context, query, status string) ([]Record, error
 
 func (s *Store) State(ctx context.Context) (State, error) {
 	var v State
-	err := s.db.QueryRowContext(ctx, `SELECT department,watermark,batch_upper,last_attempt,last_error,
+	err := s.db.QueryRowContext(ctx, `SELECT department,watermark,batch_upper,last_attempt,last_error,discovery_cycle,discovery_start,discovery_offset,discovery_done,
 		(SELECT count(*) FROM tickets),
 		(SELECT count(*) FROM tickets WHERE snapshot_json IS NOT NULL),
-		(SELECT count(*) FROM tickets WHERE sync_error!='' AND sync_stopped=0) FROM sync_state WHERE id=1`).Scan(&v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.Selected, &v.Ready, &v.Failed)
+		(SELECT count(*) FROM tickets WHERE sync_error!='' AND sync_stopped=0),
+		(SELECT count(*) FROM tickets WHERE json_extract(snapshot_json,'$.complete')=1 AND sync_stopped=0),
+		(SELECT count(*) FROM tickets WHERE sync_stopped=1) FROM sync_state WHERE id=1`).Scan(&v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.DiscoveryCycle, &v.DiscoveryStart, &v.DiscoveryOffset, &v.DiscoveryDone, &v.Selected, &v.Ready, &v.Failed, &v.Complete, &v.Stopped)
 	return v, err
 }
 
@@ -335,4 +332,26 @@ func (s *Store) Finish(ctx context.Context, watermark string, runErr error) erro
 func (s *Store) StopSync(ctx context.Context, id, reason string) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE tickets SET sync_stopped=1,sync_error=?,checked_at=? WHERE id=?", reason, time.Now().UTC().Format(time.RFC3339Nano), id)
 	return err
+}
+
+// SaveDiscovery commits a validated page and cursor together; retrying a page is idempotent.
+func (s *Store) SaveDiscovery(ctx context.Context, ids []string, cycle, start string, next int, done bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if id == "" {
+			return errors.New("discovery ID missing")
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO tickets(id,selected_at) VALUES(?,?)", id, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE sync_state SET discovery_cycle=?,discovery_start=?,discovery_offset=?,discovery_done=? WHERE id=1", cycle, start, next, done)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }

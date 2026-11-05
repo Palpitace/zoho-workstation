@@ -1,5 +1,5 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 按输入版本的分析记录、重试耗尽/最近失败信息、成功结果保留和持久调用计数。
+// output: 按输入版本的分析记录、持续退避/最近失败信息、成功结果保留和持久调用计数。
 // pos: SQLite AI 结果与调用计数边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -29,11 +29,11 @@ type AnalysisRun struct {
 	Error         string          `json:"error,omitempty"`
 }
 type AnalysisView struct {
-	Current        *AnalysisRun `json:"current"`
-	Success        *AnalysisRun `json:"success"`
-	Stale          bool         `json:"stale"`
-	RetryExhausted bool         `json:"retry_exhausted"`
-	LastFailedAt   string       `json:"last_failed_at,omitempty"`
+	Current      *AnalysisRun `json:"current"`
+	Success      *AnalysisRun `json:"success"`
+	Stale        bool         `json:"stale"`
+	NextRetryAt  string       `json:"next_retry_at,omitempty"`
+	LastFailedAt string       `json:"last_failed_at,omitempty"`
 }
 type Budget struct {
 	Total int `json:"total"`
@@ -76,11 +76,12 @@ func (s *Store) StartAnalysis(ctx context.Context, req AnalysisRequest, force bo
 	}
 	defer tx.Rollback()
 	var running, success, failures, invalid int
-	err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(status='running'),0),coalesce(sum(status='success'),0),coalesce(sum(status='failed'),0),coalesce(sum(status='invalid'),0) FROM ai_runs WHERE ticket_id=? AND kind=? AND input_hash=? AND schema_version=? AND requested_model=?`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel).Scan(&running, &success, &failures, &invalid)
+	var lastFailure string
+	err = tx.QueryRowContext(ctx, `SELECT coalesce(sum(status='running'),0),coalesce(sum(status='success'),0),coalesce(sum(status='failed'),0),coalesce(sum(status='invalid'),0),coalesce(max(CASE WHEN status='failed' THEN completed_at END),'') FROM ai_runs WHERE ticket_id=? AND kind=? AND input_hash=? AND schema_version=? AND requested_model=?`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel).Scan(&running, &success, &failures, &invalid, &lastFailure)
 	if err != nil {
 		return run, false, err
 	}
-	if running > 0 || (!force && (success > 0 || failures >= 2 || invalid > 0)) {
+	if running > 0 || (!force && (success > 0 || time.Now().Before(retryTime(lastFailure, failures)) || invalid > 0)) {
 		return run, false, nil
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO ai_runs(ticket_id,kind,input_hash,schema_version,requested_model,round,status,started_at) VALUES(?,?,?,?,?,?,'running',?)`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel, req.Round, run.StartedAt)
@@ -150,6 +151,21 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 			view.Stale = !matches
 		}
 	}
-	view.RetryExhausted = failures >= 2 && view.Current != nil && view.Current.Status == "failed"
+	if view.Current != nil && view.Current.Status == "failed" && (view.Success == nil || view.Stale) {
+		view.NextRetryAt = retryTime(view.LastFailedAt, failures).Format(time.RFC3339Nano)
+	}
 	return view, rows.Err()
+}
+
+// retryTime bounds request frequency, never the lifetime number of attempts.
+func retryTime(completed string, failures int) time.Time {
+	if failures == 0 {
+		return time.Time{}
+	}
+	at, err := time.Parse(time.RFC3339Nano, completed)
+	if err != nil {
+		return time.Time{}
+	}
+	delay := time.Minute * time.Duration(1<<min(failures-1, 5))
+	return at.Add(min(delay, 30*time.Minute))
 }

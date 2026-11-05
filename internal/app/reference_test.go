@@ -1,11 +1,12 @@
 // input: 隔离 SQLite、合成 Jev HTTP 服务和仅接收 stdin 的临时 Python 入口。
-// output: Bub→Jev 顺序、耗尽重试的显式恢复/历史保留/单次限额、环境预检与缓存复用证据。
+// output: Bub→Jev 顺序、自动退避与手动提前重试/历史保留/单次限额、环境预检与缓存复用证据。
 // pos: 总结到评估流水线集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -210,6 +211,28 @@ else:
 			if err = os.WriteFile("release", nil, 0600); err != nil {
 				t.Fatal(err)
 			}
+			if !success {
+				// Explicitly seed a second historical failure; automatic retries now cool down.
+				for _, id := range []string{"1", "2"} {
+					deadline := time.Now().Add(4 * time.Second)
+					for read(id)["bub"].Status != "failed" && time.Now().Before(deadline) {
+						time.Sleep(10 * time.Millisecond)
+					}
+					for {
+						err := service.RequestAnalysis(id, "bub")
+						if err == nil {
+							break
+						}
+						if !errors.Is(err, store.ErrBusy) || time.Now().After(deadline) {
+							t.Fatal(err)
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
+					for read(id)["bub"].Status != "failed" && time.Now().Before(deadline) {
+						time.Sleep(10 * time.Millisecond)
+					}
+				}
+			}
 			for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); {
 				s := read("2")
 				if success && s["jev"].Status == "success" && s["bub"].Status == "success" {
@@ -249,7 +272,7 @@ else:
 				}
 			}
 			if !success {
-				// Old environment failures survive deployment; recovery must be explicit.
+				// Historical failures survive deployment; manual retry may bypass cooldown.
 				service.Close()
 				service, err = app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
 				if err != nil {
@@ -260,7 +283,7 @@ else:
 				}
 				defer service.Close()
 				state := read("2")
-				if !state["bub"].RetryExhausted || state["bub"].LastFailedAt == "" || !state["bub"].FailureBeforeStart || !strings.Contains(state["jev"].WaitingReason, "耗尽") {
+				if state["bub"].NextRetryAt == "" || state["bub"].LastFailedAt == "" || !state["bub"].FailureBeforeStart || !strings.Contains(state["jev"].WaitingReason, "重试") {
 					t.Fatalf("historical exhausted state or Jev reason missing: %+v", state)
 				}
 				request := func(method, path, body, token string) *httptest.ResponseRecorder {
@@ -326,7 +349,7 @@ else:
 				if w := request("POST", "/api/analysis/bub/retry", body, token); w.Code != 409 {
 					t.Fatal("stale confirmation replayed")
 				}
-				// One confirmed pass does not reset the automatic failure limit.
+				// A confirmed pass does not bypass the next automatic cooldown.
 				time.Sleep(100 * time.Millisecond)
 				if budget, _ := db.AnalysisBudget(ctx, app.DevelopmentRound); budget.Total != 6 {
 					t.Fatal("recovery retried without another confirmation")
@@ -342,7 +365,7 @@ else:
 				if calls.Load() != 2 {
 					t.Fatal("Jev did not resume after recovered summaries")
 				}
-				if read("1")["bub"].RetryExhausted {
+				if read("1")["bub"].NextRetryAt != "" {
 					t.Fatal("success still shown as exhausted")
 				}
 				service.Close()

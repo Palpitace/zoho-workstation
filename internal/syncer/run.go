@@ -1,4 +1,4 @@
-// input: 只读 Zoho 客户端、SQLite 存储、固定采样限制和回查窗口。
+// input: 只读 Zoho 客户端、SQLite 存储、创建起始时间/显式采样及回查窗口。
 // output: 有界并发读取、串行持久化及合并/删除/移出停止；限流取消不丢水位。
 // pos: 拉取、清洗与保存的同步编排边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer
@@ -19,6 +19,7 @@ import (
 )
 
 type Options struct {
+	StartTime   time.Time
 	SampleSize  int
 	MaxTickets  int
 	Concurrency int
@@ -66,11 +67,29 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 			runErr = errors.Join(runErr, fmt.Errorf("record synchronization result: %w", err))
 		}
 	}()
+	discoveryPending := false
+	if !opts.StartTime.IsZero() {
+		cycle, start := until.Format(time.RFC3339Nano), opts.StartTime.UTC().Format(time.RFC3339Nano)
+		offset := state.DiscoveryOffset
+		if state.DiscoveryCycle != cycle || state.DiscoveryStart != start {
+			offset = 0
+		}
+		if state.DiscoveryCycle != cycle || state.DiscoveryStart != start || !state.DiscoveryDone {
+			found, next, done, err := client.Discover(ctx, opts.StartTime, offset)
+			if err != nil {
+				return result, fmt.Errorf("discover department tickets: %w", err)
+			}
+			if err = db.SaveDiscovery(ctx, found, cycle, start, next, done); err != nil {
+				return result, err
+			}
+			discoveryPending = !done
+		}
+	}
 	ids, err := db.IDs(ctx)
 	if err != nil {
 		return result, err
 	}
-	if len(ids) == 0 {
+	if len(ids) == 0 && opts.StartTime.IsZero() {
 		ids, err = client.Recent(ctx, opts.SampleSize)
 		if err != nil {
 			return result, fmt.Errorf("select sample: %w", err)
@@ -93,6 +112,12 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	now := time.Now()
 	for _, id := range ids {
 		r := byID[id]
+		if !opts.StartTime.IsZero() {
+			created, err := time.Parse(time.RFC3339Nano, r.CreatedTime)
+			if err == nil && created.Before(opts.StartTime) {
+				continue
+			}
+		}
 		checked := attemptedAt[id]
 		if r.SyncStopped {
 			continue
@@ -122,7 +147,15 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 		if err != nil {
 			return result, errors.New("stored synchronization watermark is invalid")
 		}
-		candidates, err = client.Changed(ctx, candidates, since.Add(-opts.Lookback), until)
+		if opts.StartTime.IsZero() {
+			candidates, err = client.Changed(ctx, candidates, since.Add(-opts.Lookback), until)
+		} else {
+			known := make(map[string]string, len(candidates))
+			for _, id := range candidates {
+				known[id] = byID[id].ModifiedTime
+			}
+			candidates, err = client.ChangedKnown(ctx, candidates, since.Add(-opts.Lookback), until, known)
+		}
 		if err != nil {
 			return result, fmt.Errorf("find changed tickets: %w", err)
 		}
@@ -200,6 +233,9 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
+	}
+	if discoveryPending {
+		result.Remaining++
 	}
 	scanned = true
 	if result.Failed > 0 {

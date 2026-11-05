@@ -26,8 +26,8 @@ func (a *App) RequestRecovery(kind string, candidates []RetryCandidate) error {
 	if !model.Enabled {
 		return errors.New("analysis capability is disabled")
 	}
-	if len(candidates) == 0 || len(candidates) > 50 {
-		return errors.New("请选择 1 至 50 张待重试工单")
+	if len(candidates) == 0 {
+		return errors.New("请选择待重试工单")
 	}
 	a.mu.Lock()
 	ctx := a.ctx
@@ -58,7 +58,7 @@ func (a *App) RequestRecovery(kind string, candidates []RetryCandidate) error {
 		if err != nil {
 			return err
 		}
-		if !automaticallyEligible(record) {
+		if !a.automaticallyEligible(record) {
 			return errStaleRecovery
 		}
 		req, _, err := requestForRecord(ctx, a.db, a.cfg, record, kind, DevelopmentRound)
@@ -69,7 +69,7 @@ func (a *App) RequestRecovery(kind string, candidates []RetryCandidate) error {
 		if err != nil {
 			return err
 		}
-		if !view.RetryExhausted || view.Current.ID != candidate.RunID {
+		if view.Current == nil || view.Current.Status != "failed" || view.Current.ID != candidate.RunID {
 			return errStaleRecovery
 		}
 		confirmed[candidate.TicketID] = candidate.RunID

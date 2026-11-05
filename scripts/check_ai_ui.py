@@ -26,7 +26,7 @@ def main():
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     success = {"status": "success", "stale": False, "automatic_eligible": True}
-    failed = {"status": "failed", "stale": True, "retry_exhausted": True,
+    failed = {"status": "failed", "stale": True, "next_retry_at": "2026-11-05T03:00:00Z",
               "last_failed_at": "2026-11-05T01:00:00Z", "failure_before_start": True,
               "error": "Bub: summary_failed", "automatic_eligible": True}
     status = {
@@ -36,7 +36,7 @@ def main():
         "runtime": {"automatic": True, "ai_scope": "all_synced", "last_error": {},
                     "started_at": "2026-11-05T02:00:00Z", "recovery_pending": {"bub": 0, "jev": 0}},
         "ai": {kind: {"pending": 0, "running": 0, "failed": 1, "success": 29,
-                      "stale": 1, "retry_exhausted": 1} for kind in ("jev", "bub")},
+                      "stale": 1, "retry_waiting": 1} for kind in ("jev", "bub")},
         "retry_candidates": {"bub": [{"ticket_id": "1", "run_id": 2}], "jev": []},
     }
     state = {"changed": False, "requests": [], "hold": False, "held": [], "posts": []}
@@ -92,8 +92,8 @@ def main():
             scroll = page.evaluate("window.scrollY")
             state["changed"] = True
             page.clock.run_for(5100)
-            expect(row.get_by_text("需重试", exact=True)).to_be_attached()
-            assert "历史失败" in row.get_by_text("需重试", exact=True).get_attribute("title")
+            expect(row.get_by_text("等待重试", exact=True)).to_be_attached()
+            assert "历史失败" in row.get_by_text("等待重试", exact=True).get_attribute("title")
             assert page.evaluate("window.scrollY") == scroll
             assert parse_qs(urlparse(state["requests"][-1]).query)["q"] == ["Synthetic"]
             assert parse_qs(urlparse(state["requests"][-1]).query)["product"] == ["D520"]
@@ -106,7 +106,7 @@ def main():
             page.clock.run_for(11000)
             assert len(state["requests"]) == before
             page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable:true, value:'visible'}); document.dispatchEvent(new Event('visibilitychange'))")
-            expect(row.get_by_text("需重试", exact=True)).to_have_count(0)
+            expect(row.get_by_text("等待重试", exact=True)).to_have_count(0)
 
             # A slow poll must not overlap another poll or overwrite a newer query.
             state["hold"] = True
@@ -118,15 +118,15 @@ def main():
             assert len(state["requests"]) == before
             state["changed"] = True
             page.get_by_role("button", name="查询", exact=True).click()
-            expect(row.get_by_text("需重试", exact=True)).to_be_attached()
+            expect(row.get_by_text("等待重试", exact=True)).to_be_attached()
             held, old = state["held"].pop()
             held.fulfill(json=old)
             page.wait_for_timeout(100)
-            expect(row.get_by_text("需重试", exact=True)).to_be_attached()
+            expect(row.get_by_text("等待重试", exact=True)).to_be_attached()
 
             # Recovery never POSTs just by entering the screen or opening/canceling confirmation.
             page.get_by_role("link", name="运行状态", exact=True).click()
-            button = page.get_by_role("button", name="重试已耗尽的 Bub（1）", exact=True)
+            button = page.get_by_role("button", name="立即重试失败的 Bub（1）", exact=True)
             button.click()
             page.get_by_role("button", name="取消", exact=True).click()
             assert not state["posts"]

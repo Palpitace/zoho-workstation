@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 查询与受保护恢复操作、重试耗尽/失败时间和本次启动状态、独立分析状态。
+// output: 查询与受保护恢复操作、自动退避/失败时间和本次启动状态、独立分析状态。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -26,18 +26,19 @@ type AIStatus struct {
 	Emotion            string `json:"emotion,omitempty"`
 	Category           string `json:"category,omitempty"`
 	Error              string `json:"error,omitempty"`
-	RetryExhausted     bool   `json:"retry_exhausted"`
+	NextRetryAt        string `json:"next_retry_at,omitempty"`
 	LastFailedAt       string `json:"last_failed_at,omitempty"`
 	FailureBeforeStart bool   `json:"failure_before_start"`
 	WaitingReason      string `json:"waiting_reason,omitempty"`
 }
 type ticketView struct {
 	store.Record
-	AI                map[string]AIStatus `json:"ai"`
-	TicketNumber      string              `json:"ticket_number,omitempty"`
-	WebURL            string              `json:"web_url,omitempty"`
-	FirstIncomingTime string              `json:"first_incoming_time,omitempty"`
-	SyncStatus        string              `json:"sync_status"`
+	MessageSegments   map[string][]MessageSegment `json:"message_segments,omitempty"`
+	AI                map[string]AIStatus         `json:"ai"`
+	TicketNumber      string                      `json:"ticket_number,omitempty"`
+	WebURL            string                      `json:"web_url,omitempty"`
+	FirstIncomingTime string                      `json:"first_incoming_time,omitempty"`
+	SyncStatus        string                      `json:"sync_status"`
 }
 
 // Read display-only identity from retained raw data, including existing snapshots.
@@ -65,12 +66,12 @@ type analysisView struct {
 }
 
 type counts struct {
-	Pending        int `json:"pending"`
-	Running        int `json:"running"`
-	Failed         int `json:"failed"`
-	Success        int `json:"success"`
-	Stale          int `json:"stale"`
-	RetryExhausted int `json:"retry_exhausted"`
+	Pending      int `json:"pending"`
+	Running      int `json:"running"`
+	Failed       int `json:"failed"`
+	Success      int `json:"success"`
+	Stale        int `json:"stale"`
+	RetryWaiting int `json:"retry_waiting"`
 }
 
 func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]AIStatus, map[string]analysisView, error) {
@@ -102,7 +103,7 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 		if waiting {
 			views[kind] = analysisView{AnalysisView: view, WaitingFor: "bub"}
 		}
-		s := AIStatus{Status: "pending", Stale: view.Stale, AutomaticEligible: automaticallyEligible(record), RetryExhausted: view.RetryExhausted, LastFailedAt: view.LastFailedAt, FailureBeforeStart: historical}
+		s := AIStatus{Status: "pending", Stale: view.Stale, AutomaticEligible: a.automaticallyEligible(record), NextRetryAt: view.NextRetryAt, LastFailedAt: view.LastFailedAt, FailureBeforeStart: historical}
 		if view.Current != nil {
 			s.Status = view.Current.Status
 			s.Error = view.Current.Error
@@ -132,8 +133,8 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 	}
 	if summaries["jev"].Status == "waiting" {
 		reason := "等待当前会话的 Bub 总结完成"
-		if summaries["bub"].RetryExhausted {
-			reason = "Bub 自动重试已耗尽，需先重试总结"
+		if summaries["bub"].NextRetryAt != "" {
+			reason = "Bub 总结失败，正在等待自动重试"
 		} else if summaries["bub"].Status == "failed" {
 			reason = "Bub 总结失败，等待总结恢复"
 		} else if summaries["bub"].Status == "disabled" {
@@ -188,7 +189,9 @@ func (a *App) Handler() http.Handler {
 			apiError(c, 500, "cannot read analysis state")
 			return
 		}
-		c.JSON(200, displayTicket(record, ai))
+		view := displayTicket(record, ai)
+		view.MessageSegments = displayMessageSegments(record)
+		c.JSON(200, view)
 	})
 	router.GET("/api/tickets/:id/analysis", func(c *gin.Context) {
 		record, err := a.db.Get(c.Request.Context(), c.Param("id"))
@@ -207,7 +210,7 @@ func (a *App) Handler() http.Handler {
 		var body struct {
 			Candidates []RetryCandidate `json:"candidates"`
 		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16*1024)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256*1024)
 		if c.ShouldBindJSON(&body) != nil {
 			apiError(c, 400, "invalid recovery request")
 			return
@@ -260,10 +263,13 @@ func (a *App) status(c *gin.Context) {
 		return
 	}
 	totals := map[string]*counts{"jev": {}, "bub": {}}
-	eligibleCount := 0
+	eligibleCount, stoppedCount := 0, 0
 	candidates := map[string][]RetryCandidate{"bub": {}, "jev": {}}
 	for _, record := range records {
-		if automaticallyEligible(record) {
+		if record.SyncStopped {
+			stoppedCount++
+		}
+		if a.automaticallyEligible(record) {
 			eligibleCount++
 		}
 		if !record.Pending {
@@ -290,9 +296,11 @@ func (a *App) status(c *gin.Context) {
 			case "pending", "waiting":
 				n.Pending++
 			}
-			if s.RetryExhausted && s.Status == "failed" {
-				n.RetryExhausted++
-				if s.AutomaticEligible {
+			if s.Status == "failed" {
+				if s.NextRetryAt != "" {
+					n.RetryWaiting++
+				}
+				if s.AutomaticEligible && views[kind].Current != nil && views[kind].Current.Status == "failed" {
 					candidates[kind] = append(candidates[kind], RetryCandidate{TicketID: record.ID, RunID: views[kind].Current.ID})
 				}
 			}
@@ -302,7 +310,7 @@ func (a *App) status(c *gin.Context) {
 		}
 	}
 	a.mu.Lock()
-	runtime := gin.H{"started_at": a.startedAt, "recovery_pending": map[string]int{"bub": len(a.recovery["bub"]), "jev": len(a.recovery["jev"])}, "sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "all_synced", "ai_scope_count": eligibleCount, "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
+	runtime := gin.H{"sync_start_time": a.cfg.SyncStartTime.Format(time.RFC3339), "next_sync_at": a.nextSync.UTC().Format(time.RFC3339), "last_sync_batch": a.lastSyncResult, "stopped_count": stoppedCount, "started_at": a.startedAt, "recovery_pending": map[string]int{"bub": len(a.recovery["bub"]), "jev": len(a.recovery["jev"])}, "sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "all_synced", "ai_scope_count": eligibleCount, "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
 	a.mu.Unlock()
 	c.JSON(200, gin.H{"retry_candidates": candidates, "sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round}})
 }

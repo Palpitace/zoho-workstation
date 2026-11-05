@@ -11,6 +11,7 @@
 | TicketList.svelte | 列表页面 | 顶部组合搜索、五列表头筛选、清除条件和历史开关 |
 | FilterCombobox.svelte | 表头筛选 | Popover/Command 组合、选项搜索/计数和焦点交互 |
 | TicketDetail.svelte | 详情页面 | 紧凑工单字段、评估/总结顺序、角色背景色、折叠倒序会话及停止状态 |
+| MessageBody.svelte | 消息正文 | 纯文本分段及独立、默认折叠的嵌套邮件引用 |
 | JevAssessment.svelte | 评估展示 | Jev 枚举、失败/过期状态，无结果来源面板或说明注脚 |
 | BubSummary.svelte | 总结展示 | 三段按需总结、旧版提示、引用定位及浮动返回入口 |
 | RunStatus.svelte | 运行概览 | 部门、水位、批次/并发、自动任务、分析数量及调用统计 |
@@ -54,3 +55,7 @@ Jev 列表拆为情绪、优先级、问题分类，分类复用服务端 catego
 流水线：Bub 先总结，Jev 后评估。AIStatus.waiting 优先显示“等待总结”；详情 AnalysisView.waiting_for=bub 时显示等待并禁用手动 Jev。旧结果保留并标过期，Bub 失败不阻止查看。运行状态页说明依赖顺序。
 
 Issue #3：列表耗尽徽标简写“需重试”，title 给出“自动重试已耗尽”、最近失败时间及是否本次启动前的历史失败；详情同样显示，Jev 等待具体原因独立呈现。RunStatus 显示启动时间、耗尽数量、已确认待开始数，基于 status.retry_candidates 打开确认区，提交固定的 ticket_id/run_id 副本；打开/取消不发送请求。确认说明每张一次、费用及 Bub 成功后 Jev 自动接续，错误和受理消息不会被轮询清除。组件卸载取消未完成 HTTP，已经受理的后台批次不会因离开页面撤销。api.postAction 支持可选 JSON body，保留 409 安全原因。
+
+Issue #7：TicketDetail 优先展示 message_segments[source:id]，缺少派生字段时展示完整 body。MessageBody 只使用文本插值和原生 details/summary，引用默认独立折叠，键盘可操作，浏览器暴露展开状态；嵌套引用递归显示。Bub 消息引用只提供消息 ID，因此跳转时展开目标消息内全部引用，避免引用证据藏在折叠区，浮动返回入口不变。刷新同一消息保留原生展开节点；原始 HTML 永不注入。Bub invalid_summary 显示中文证据校验失败说明和原有安全原因。
+
+当前重试规则替代 Issue #3 耗尽显示：失败有 next_retry_at 时显示“等待重试”及计划时间，运行页显示退避策略和 retry_waiting 数量。用户可确认立即重试以跳过当前冷却，失败仍自动按间隔继续。运行页显示创建起点、持久发现进度、批次剩余、下次调度和停止记录数量，不再称固定样本。
