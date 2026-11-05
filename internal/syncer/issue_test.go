@@ -1,5 +1,5 @@
-// input: 固定样本的模拟部门迁移、不可见及线程计数不一致响应。
-// output: 单票失败独立重试、历史保留、部门停止和跨重启水位推进证据。
+// input: 固定样本的删除/部门迁移、不可见及缺少线程响应。
+// output: 单票失败独立重试、历史保留、删除/部门停止和跨重启水位推进证据。
 // pos: Issue 1 的同步回归测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer_test
 
@@ -24,7 +24,7 @@ import (
 )
 
 func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
-	for _, mode := range []string{"moved_before", "moved_during", "missing_404", "missing_403", "incomplete", "initial_incomplete"} {
+	for _, mode := range []string{"moved_before", "moved_during", "deleted", "deleted_during", "missing_404", "missing_403", "incomplete", "initial_incomplete"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			var reads, conversations atomic.Int32
@@ -39,10 +39,15 @@ func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
 				case "/api/v1/tickets/1", "/api/v1/tickets/2":
 					id := strings.TrimPrefix(r.URL.Path, "/api/v1/tickets/")
 					department, count := "7", "0"
+					deleted := false
 					if id == "1" {
 						n := reads.Add(1)
 						if !repaired.Load() {
 							switch mode {
+							case "deleted":
+								deleted = true
+							case "deleted_during":
+								deleted = n%2 == 0
 							case "moved_before":
 								department = "8"
 							case "moved_during":
@@ -56,11 +61,11 @@ func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
 								w.WriteHeader(403)
 								return
 							case "incomplete", "initial_incomplete":
-								count = "2"
+								count = "4"
 							}
 						}
 					}
-					json.NewEncoder(w).Encode(map[string]string{"id": id, "departmentId": department, "subject": "new snapshot", "createdTime": stamp, "modifiedTime": stamp, "threadCount": count, "commentCount": "0"})
+					json.NewEncoder(w).Encode(map[string]any{"isDeleted": deleted, "id": id, "departmentId": department, "subject": "new snapshot", "createdTime": stamp, "modifiedTime": stamp, "threadCount": count, "commentCount": "0"})
 				case "/api/v1/tickets/1/threads":
 					conversations.Add(1)
 					if strings.Contains(mode, "incomplete") && !repaired.Load() {
@@ -118,9 +123,12 @@ func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
 			body, _ := json.Marshal(bad)
 			var view map[string]any
 			json.Unmarshal(body, &view)
-			moved := strings.HasPrefix(mode, "moved")
+			moved := strings.HasPrefix(mode, "moved") || strings.HasPrefix(mode, "deleted")
 			if (view["sync_stopped"] == true) != moved || bad.SyncError == "" {
 				t.Fatalf("wrong move/failure classification: %s", body)
+			}
+			if strings.Contains(mode, "incomplete") && !strings.Contains(bad.SyncError, "threadCount_mismatch") {
+				t.Fatal("incomplete sync did not preserve its diagnostic reason")
 			}
 			if mode != "initial_incomplete" && bad.Subject != "historical snapshot" {
 				t.Fatal("old snapshot overwritten")
@@ -128,7 +136,7 @@ func TestIssueFailureDoesNotBlockWatermark(t *testing.T) {
 			if mode == "initial_incomplete" && (bad.Complete || bad.Pending || len(bad.Messages) != 3) {
 				t.Fatal("partial evidence lost or declared complete")
 			}
-			if mode == "moved_before" && conversations.Load() != 0 {
+			if (mode == "moved_before" || mode == "deleted") && conversations.Load() != 0 {
 				t.Fatal("out-of-department conversation fetched")
 			}
 			attempts := reads.Load()

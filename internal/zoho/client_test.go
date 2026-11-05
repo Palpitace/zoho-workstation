@@ -1,5 +1,5 @@
 // input: 合成 Zoho HTTP 响应及隔离 httptest 服务。
-// output: 分页、限定 ID 局部/全局失败边界、完整线程及错误脱敏的行为证据。
+// output: 分页、权限回退、完整线程及计数下界的公开 API 回归证据。
 // pos: 外部 API 边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho_test
 
@@ -294,6 +294,34 @@ func TestRateLimitPreservesServerWait(t *testing.T) {
 			_, err := client.Recent(context.Background(), 1)
 			if zoho.RetryAfter(err) < tc.minimum {
 				t.Fatalf("server wait shortened: %v", zoho.RetryAfter(err))
+			}
+		})
+	}
+}
+
+func TestThreadCountIsOnlyAMissingEvidenceGuard(t *testing.T) {
+	for _, count := range []int{0, 1, 2} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/oauth/v2/token":
+					fmt.Fprint(w, `{"access_token":"synthetic"}`)
+				case "/api/v1/tickets/1":
+					fmt.Fprintf(w, `{"id":"1","departmentId":"7","threadCount":"%d","commentCount":"0","modifiedTime":"2026-01-02T00:00:00Z"}`, count)
+				case "/api/v1/tickets/1/threads":
+					fmt.Fprint(w, `{"data":[{"id":"10"}]}`)
+				case "/api/v1/tickets/1/threads/10":
+					fmt.Fprint(w, `{"id":"10","content":"complete feedback"}`)
+				case "/api/v1/tickets/1/comments":
+					fmt.Fprint(w, `{"data":[]}`)
+				default:
+					w.WriteHeader(404)
+				}
+			}))
+			defer remote.Close()
+			raw, err := zoho.New(config.Zoho{BaseURL: remote.URL, AccountsURL: remote.URL, DepartmentID: "7"}, remote.Client()).Fetch(context.Background(), "1")
+			if err != nil || raw.Complete != (count <= 1) {
+				t.Fatalf("count=%d complete=%t err=%v", count, raw.Complete, err)
 			}
 		})
 	}

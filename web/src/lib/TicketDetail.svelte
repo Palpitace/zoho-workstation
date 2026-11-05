@@ -1,5 +1,5 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 紧凑工单信息、评估总结、工单独立引用导航和折叠倒序会话。 -->
+<!-- output: 紧凑详情、明确删除/移出状态、独立引用导航和折叠倒序会话。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
@@ -24,6 +24,7 @@
   const roles: Record<string, string> = { customer: "客户", agent: "客服", unknown: "作者未知" };
   const visibility: Record<string, string> = { public: "公开", private: "内部", unknown: "可见性未知" };
   const messageStates: Record<string, string> = { DRAFT: "草稿，未发送", FAILED: "发送失败", PENDING: "等待发送" };
+  const stopReason = $derived(ticket?.sync_error === "ticket confirmed deleted in Zoho" ? "Zoho 已删除此工单" : "已确认移出配置部门");
 </script>
 
 <section class="space-y-6" aria-label="工单详情" aria-busy={loading}>
@@ -33,7 +34,7 @@
   {:else if ticket?.pending}
     <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">工单 #{ticket.id}</h1>
     <Badge variant={ticket.sync_error && !ticket.sync_stopped ? "destructive" : "secondary"}>{syncLabel(ticket)}</Badge>
-    <p class="text-muted-foreground">{ticket.sync_stopped ? "已确认移出配置部门，停止拉取新内容；尚无此前保存的详情。" : "这张工单已进入采样范围，详情尚未保存。"}</p>
+    <p class="text-muted-foreground">{ticket.sync_stopped ? `${stopReason}，停止拉取新内容；尚无此前保存的详情。` : "这张工单已进入采样范围，详情尚未保存。"}</p>
     {#if ticket.sync_error && !ticket.sync_stopped}<p role="alert" class="text-sm text-destructive">{ticket.sync_error}</p>{/if}
   {:else if error}
     <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold">无法读取工单</h1>
@@ -50,7 +51,7 @@
     </header>
 
     {#if ticket.sync_stopped}
-      <div role="status" class="rounded-md border bg-muted/40 p-4 text-sm">已确认移出配置部门，已停止拉取新内容。以下保留移出前的历史快照，不代表工单当前状态。</div>
+      <div role="status" class="rounded-md border bg-muted/40 p-4 text-sm">{stopReason}，已停止拉取新内容。以下保留此前的历史快照，不代表工单当前状态。</div>
     {:else if ticket.sync_error}
       <div role="alert" class="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm">
         <p class="font-medium text-destructive">最近同步失败，以下为已保存的内容。系统将间隔至少 5 分钟重试，不影响其他工单同步。</p>

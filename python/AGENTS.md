@@ -6,7 +6,7 @@
 
 ## 协议和运行
 
-输入只有 `{input:<完整脱敏会话及可选参考>,config:{api_base,api_key,model},schema_version:"bub-summary-v3"}`。
+输入只有 `{input:<完整脱敏会话及可选参考>,config:{api_base,api_key,model},schema_version:"bub-summary-v4"}`。
 input 保持 messages、主题、描述等字段平面结构，必有 `conversation_hash`（附参考之前的会话版本）和 `jev_reference`；无可用评估时参考显式为 null，不阻止独立总结。
 非空参考只允许 `{kind:"model_assessment",run_id,conversation_hash,schema_version,requested_model,returned_model,choices:{字段:标签字符串}}`，不接收额外自由文本或概率字段。参考 Hash 必须与 input.conversation_hash 相同，不一致返回安全诊断 `reference_version_mismatch`；Go 负责筛选当前有效评估。
 完整会话与独立参考一同传入无工具 SDK，参考不变成消息或事实，不进入可引用消息 ID 集。Prompt 要求原文优先、缺少证据时承认未知，不能因 Jev 参考推定客户已执行或缺陷已确认，也不让 Bub 重新执行 Jev 评估。
@@ -43,7 +43,7 @@ Republic 的公开 middleware 读取 `Completed.response`，保留供应商实�
 [DeepSeek JSON 模式](https://api-docs.deepseek.com/guides/json_mode/)使用 `response_format.type=json_object`，只保证 JSON 格式，不保证字段或事实正确。
 Republic `output_schema` 在 Chat 格式下会生成 `json_schema`，当前 DeepSeek Chat 文档未声明支持，故本入口使用 JSON 模式及 Pydantic 本地校验。
 空白、截断、拒绝、工具输出、结构错误和不存在的引用均失败，不保存为成功总结；不因失败删除 Go 中的旧结果。
-v3 结果只有 device_info、customer_feedback、support_responses 三个必有数组，每类最多 10 项，统一 `{text,message_ids}`。无证据则数组为空，不强制“未知”等占位，不新增模型建议。设备信息、客户实际反馈、客服已回复/给予排查分别归类；Prompt 明确建议不能当已执行，客户确认及实际结果必须基于客户原话。
+v4 结果只有 device_info、customer_feedback、support_responses 三个必有数组，每类最多 10 项，统一 `{text,message_ids}`。无证据则数组为空，不强制“未知”等占位，不新增模型建议。设备信息、客户实际反馈、客服已回复/给予排查分别归类；Prompt 明确建议不能当已执行，客户确认及实际结果必须基于客户原话。
 客户反馈至少有 customer 或 mixed_authors 消息引用；客服回复至少有 agent 或 mixed_authors，且其引用不允许 private 或 DRAFT/FAILED/PENDING 消息。模型仍负责混合转录逐句归属，不根据外层角色猜测执行者。
 设备信息可引用消息；仅当 text 逐字等于 input.product 或为 input.description 的逐字片段时，允许 message_ids=[] 表示工单字段证据。Prompt 禁止设备推断、截断否定/条件或拼接改变含义；没有消息或明确设备字段时三个数组全空。
 本地验证只证明结构、引用、字面字段及部分角色约束，不能证明设备分类、建议与执行等自由文本事实准确。旧 v1/v2 结果保留历史，不自动映射新分类；新版 Schema 使旧结果过期。没有真实模型验证时不能声称本次新格式已真实验证。
@@ -63,3 +63,5 @@ v3 结果只有 device_info、customer_feedback、support_responses 三个必有
 | uv.lock | 自动生成锁文件 | 固定全部解析依赖及校验信息 |
 | .venv/ | 忽略的安装产物 | 本机 Python 解释器与依赖 |
 | __pycache__/ | 忽略的缓存 | Python 导入与测试缓存 |
+
+v4 客户反馈例外：只有单条引用，role=unknown、source=thread、direction=in、visibility=public、status=SUCCESS 且 text 为 body 连续逐字片段时允许保存。不是将 role 改成 customer，也不是任意未知作者或客服转述豁免；页面标注来信原文/作者未确认。Prompt 要求完整保留否定/条件，不翻译改写，客服回复缺失时 support_responses=[]。Go/Python 同步校验；Schema 升级使旧失败版本不再挡住新版本重试，旧结果继续保留。单封正常客户来信也不要求有客服回复。测试先在旧校验拒绝未知作者原文，再在新校验通过，同时拒绝改写、客服、内部、出站和草稿证据。实际只调用 1 次配置的 Bub 模型，使用合成单封未知作者来信，返回 1 条原文反馈、0 条客服回复；不代表所有实际模型输出都能通过。

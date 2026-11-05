@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 可取消的短间隔分批同步/退避及独立 Jev/Bub 分析调度，不按累计次数拦截。
+// output: 有界并发同步、可取消退避及独立 Jev/Bub 调度，不按累计次数拦截。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -47,6 +47,15 @@ func New(cfg config.Config, db *store.Store, client *zoho.Client) (*App, error) 
 	}
 	if cfg.SyncInterval <= 0 {
 		return nil, errors.New("sync interval must be positive")
+	}
+	if cfg.SyncBatchSize == 0 {
+		cfg.SyncBatchSize = 9
+	}
+	if cfg.SyncConcurrency == 0 {
+		cfg.SyncConcurrency = 3
+	}
+	if cfg.SyncBatchSize < 1 || cfg.SyncBatchSize > 50 || cfg.SyncConcurrency < 1 || cfg.SyncConcurrency > 5 {
+		return nil, errors.New("invalid sync batch size or concurrency")
 	}
 	return &App{cfg: cfg, db: db, zoho: client, csrf: hex.EncodeToString(token[:]), busy: map[string]bool{}, lastError: map[string]string{}}, nil
 }
@@ -187,7 +196,7 @@ func (a *App) RequestSync() error {
 		for {
 			started := time.Now()
 			ctx, cancel := context.WithTimeout(a.ctx, 5*time.Minute)
-			result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{SampleSize: 50, MaxTickets: 3, Lookback: a.cfg.SyncLookback})
+			result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{SampleSize: 50, MaxTickets: a.cfg.SyncBatchSize, Concurrency: a.cfg.SyncConcurrency, Lookback: a.cfg.SyncLookback})
 			cancel()
 			a.mu.Lock()
 			a.lastError["sync"] = ""

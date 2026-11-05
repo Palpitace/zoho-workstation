@@ -7,7 +7,9 @@
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 配置职责和索引 |
-| config.go | 配置入口 | 使用 godotenv 读取文件、校验监听 IP、启用能力与只读范围 |
-| config_test.go | 启动配置验证 | 默认仅本机、显式容器监听与非法地址拒绝 |
+| config.go | 配置入口 | 使用 godotenv 读取文件、校验监听 IP、同步批次/并发、启用能力与只读范围 |
+| config_test.go | 启动配置验证 | 监听地址及同步批次/并发默认值、上下限校验 |
 
 APP_LISTEN_HOST 默认为 127.0.0.1，只接受 IP 地址；容器通过宿主回环端口转发时可显式设为 0.0.0.0。它只控制 TCP 监听，不改变 HTTP Host/Origin 白名单、调用预算或业务部门。
+
+SYNC_BATCH_SIZE 默认 9，范围 1..50；SYNC_CONCURRENCY 默认 3，范围 1..5。旧 .env 缺少这两项时使用默认值，不改写 .env。服务同时校验直接构造 Config 的边界。批次大小仅控制服务每批工单数，CLI sample 的 -max 仍有效；两种入口共用并发配置。

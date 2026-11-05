@@ -1,5 +1,5 @@
 // input: 根目录 .env 配置，不读取或覆盖进程环境。
-// output: 经校验的服务和监听 IP 配置；错误仅包含字段名。
+// output: 经校验的服务、监听 IP 及有界同步批次/并发配置，错误不含值。
 // pos: 配置加载边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package config
 
@@ -29,6 +29,7 @@ type Config struct {
 	Zoho                                                  Zoho
 	Jev, Bub                                              Model
 	SyncInterval, SyncLookback                            time.Duration
+	SyncBatchSize, SyncConcurrency                        int
 }
 
 // Load reads only the specified file so subprocesses never need inherited secrets.
@@ -69,6 +70,20 @@ func Load(path string) (Config, error) {
 			return c, fmt.Errorf("invalid %s", key)
 		}
 		*dst = d
+	}
+	for _, setting := range []struct {
+		key, fallback string
+		max           int
+		dst           *int
+	}{
+		{"SYNC_BATCH_SIZE", "9", 50, &c.SyncBatchSize},
+		{"SYNC_CONCURRENCY", "3", 5, &c.SyncConcurrency},
+	} {
+		n, err := strconv.Atoi(value(setting.key, setting.fallback))
+		if err != nil || n < 1 || n > setting.max {
+			return c, fmt.Errorf("invalid %s: expected 1..%d", setting.key, setting.max)
+		}
+		*setting.dst = n
 	}
 	for _, key := range []string{"ENABLE_JEV", "ENABLE_BUB", "ENABLE_WECOM"} {
 		if v[key] != "true" && v[key] != "false" {

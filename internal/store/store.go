@@ -1,5 +1,5 @@
 // input: SQLite 路径、固定部门和原始/规范化工单快照。
-// output: 持久化样本、独立失败/部门停止状态与同步水位，以及同库操作锁。
+// output: 持久化样本、失败/删除/部门停止状态与同步水位，以及同库操作锁。
 // pos: Go 独占数据库边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -328,8 +328,8 @@ func (s *Store) Finish(ctx context.Context, watermark string, runErr error) erro
 }
 
 // StopSync preserves the last in-scope snapshot and permanently excludes this
-// reserved ID from network reads; only a verified department change permits it.
-func (s *Store) StopSync(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE tickets SET sync_stopped=1,sync_error='confirmed outside configured department; historical snapshot retained',checked_at=? WHERE id=?", time.Now().UTC().Format(time.RFC3339Nano), id)
+// reserved ID from network reads after a verified deletion or department change.
+func (s *Store) StopSync(ctx context.Context, id, reason string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE tickets SET sync_stopped=1,sync_error=?,checked_at=? WHERE id=?", reason, time.Now().UTC().Format(time.RFC3339Nano), id)
 	return err
 }

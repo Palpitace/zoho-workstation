@@ -1,5 +1,5 @@
 // input: Zoho OAuth 配置、限定部门与调用方 context。
-// output: 只读会话、固定 ID 变化与缺失复核、明确部门迁移及安全限流诊断。
+// output: 完整只读会话、固定 ID 复核、明确删除/迁移及安全限流诊断。
 // pos: Zoho HTTP 与本地采样的边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho
 
@@ -25,6 +25,7 @@ import (
 )
 
 var ErrOutsideDepartment = errors.New("ticket confirmed outside configured department")
+var ErrDeleted = errors.New("ticket confirmed deleted in Zoho")
 
 var idPattern = regexp.MustCompile(`^[0-9]+$`)
 
@@ -329,7 +330,7 @@ func (c *Client) Fetch(ctx context.Context, id string) (ticket.RawSnapshot, erro
 	if err != nil {
 		return raw, err
 	}
-	if err := c.checkDepartment(raw.Ticket, id); err != nil {
+	if err := c.checkTicket(raw.Ticket, id); err != nil {
 		return ticket.RawSnapshot{}, err
 	}
 	threads, err := pages(ctx, fetch, path+"/threads", "sendDateTime")
@@ -375,7 +376,9 @@ func (c *Client) Fetch(ctx context.Context, id string) (ticket.RawSnapshot, erro
 		field string
 		count int
 	}{{"threadCount", len(raw.Threads)}, {"commentCount", len(raw.Comments)}} {
-		if n, e := strconv.Atoi(field(raw.Ticket, expected.field)); e == nil && n != expected.count {
+		// Zoho counters can be lower than complete paginated results. Extra fetched
+		// evidence is not missing data; fewer rows still requires a retry.
+		if n, e := strconv.Atoi(field(raw.Ticket, expected.field)); e == nil && n > expected.count {
 			raw.Complete = false
 			raw.Warnings = append(raw.Warnings, expected.field+"_mismatch")
 		}
@@ -385,7 +388,7 @@ func (c *Client) Fetch(ctx context.Context, id string) (ticket.RawSnapshot, erro
 		return raw, fmt.Errorf("ticket consistency check: %w", err)
 	}
 	raw.Evidence[path+"#after"] = after
-	if err := c.checkDepartment(after, id); err != nil {
+	if err := c.checkTicket(after, id); err != nil {
 		return ticket.RawSnapshot{}, err
 	}
 	if field(after, "modifiedTime") != field(raw.Ticket, "modifiedTime") {
@@ -396,7 +399,7 @@ func (c *Client) Fetch(ctx context.Context, id string) (ticket.RawSnapshot, erro
 }
 
 // A missing department or mismatched ticket identity is not proof of a move.
-func (c *Client) checkDepartment(body json.RawMessage, id string) error {
+func (c *Client) checkTicket(body json.RawMessage, id string) error {
 	if field(body, "id") != id {
 		return errors.New("ticket identity mismatch")
 	}
@@ -406,6 +409,12 @@ func (c *Client) checkDepartment(body json.RawMessage, id string) error {
 	}
 	if department != c.cfg.DepartmentID {
 		return ErrOutsideDepartment
+	}
+	var flags struct {
+		Deleted bool `json:"isDeleted"`
+	}
+	if json.Unmarshal(body, &flags) == nil && flags.Deleted {
+		return ErrDeleted
 	}
 	return nil
 }

@@ -1,5 +1,5 @@
 <!-- input: Bub 结果、当前消息、操作反馈和重新总结回调。 -->
-<!-- output: 三段按需总结、引用定位及返回原总结引用的浮动入口。 -->
+<!-- output: 三段总结、未知作者原文标记、引用定位及返回总结入口。 -->
 <!-- pos: 工单详情中的 Bub 总结展示与证据定位。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -74,6 +74,9 @@
             <ul class="space-y-3 text-sm leading-7">
               {#each summary[key] as fact}
                 <li>
+                  {#if key === "customer_feedback" && fact.message_ids.length === 1 && messages.some((message) => message.id === fact.message_ids[0] && message.role === "unknown" && !message.mixed_authors)}
+                    <p class="text-xs text-muted-foreground">来信原文 · 作者未确认</p>
+                  {/if}
                   <p class="whitespace-pre-wrap break-words">{fact.text}</p>
                   {#if fact.message_ids.length}{@render references(fact.message_ids)}
                   {:else if key === "device_info"}<span class="text-xs text-muted-foreground">工单字段</span>{/if}

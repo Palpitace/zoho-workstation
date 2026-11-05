@@ -1,5 +1,5 @@
 // input: 只读 Zoho 客户端、SQLite 存储、固定采样限制和回查窗口。
-// output: 有界分批、独立持久重试与确认移出停止；水位不丢失未完成工单。
+// output: 有界并发读取、串行持久化及删除/移出停止；限流取消不丢水位。
 // pos: 拉取、清洗与保存的同步编排边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer
 
@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"zoho-workstation/internal/store"
@@ -17,9 +19,10 @@ import (
 )
 
 type Options struct {
-	SampleSize int
-	MaxTickets int
-	Lookback   time.Duration
+	SampleSize  int
+	MaxTickets  int
+	Concurrency int
+	Lookback    time.Duration
 }
 type Result struct {
 	Fetched   int `json:"fetched"`
@@ -34,10 +37,13 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	if opts.SampleSize == 0 {
 		opts.SampleSize = 50
 	}
+	if opts.Concurrency == 0 {
+		opts.Concurrency = 1
+	}
 	if opts.Lookback == 0 {
 		opts.Lookback = 24 * time.Hour
 	}
-	if opts.SampleSize < 1 || opts.SampleSize > 50 || opts.MaxTickets < 0 || opts.Lookback < 0 {
+	if opts.SampleSize < 1 || opts.SampleSize > 50 || opts.MaxTickets < 0 || opts.Lookback < 0 || opts.Concurrency < 1 || opts.Concurrency > 5 {
 		return result, errors.New("invalid synchronization limits")
 	}
 	state, err := db.State(ctx)
@@ -124,39 +130,73 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	ids = append(candidates, retries...)
 	sort.SliceStable(ids, func(i, j int) bool { return attemptedAt[ids[i]].Before(attemptedAt[ids[j]]) })
 	result.Remaining = len(ids)
-	for _, id := range ids {
-		if opts.MaxTickets > 0 && result.Fetched+result.Failed+result.Stopped >= opts.MaxTickets {
-			break
+	limit := len(ids)
+	if opts.MaxTickets > 0 {
+		limit = min(limit, opts.MaxTickets)
+	}
+	for offset := 0; offset < limit; offset += opts.Concurrency {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		wave := ids[offset:min(offset+opts.Concurrency, limit)]
+		waveCtx, cancelWave := context.WithCancel(ctx)
+		replies := make([]struct {
+			raw ticket.RawSnapshot
+			err error
+		}, len(wave))
+		var workers sync.WaitGroup
+		for i, id := range wave {
+			workers.Go(func() {
+				replies[i].raw, replies[i].err = client.Fetch(waveCtx, id)
+				if zoho.RetryAfter(replies[i].err) > 0 {
+					cancelWave()
+				}
+			})
+		}
+		workers.Wait()
+		cancelWave()
+		var rateLimit error
+		for _, reply := range replies {
+			if zoho.RetryAfter(reply.err) > zoho.RetryAfter(rateLimit) {
+				rateLimit = reply.err
+			}
+		}
+		for i, id := range wave {
+			err := replies[i].err
+			// A peer cancelled by 429 stays pending, without a false five-minute
+			// failure cooldown. No new wave starts until the caller's backoff.
+			if rateLimit != nil && ctx.Err() == nil && errors.Is(err, context.Canceled) {
+				continue
+			}
+			result.Remaining--
+			if errors.Is(err, zoho.ErrOutsideDepartment) || errors.Is(err, zoho.ErrDeleted) {
+				if err = db.StopSync(ctx, id, err.Error()); err != nil {
+					return result, err
+				}
+				result.Stopped++
+				continue
+			}
+			if err == nil {
+				err = saveTicket(ctx, db, id, replies[i].raw)
+			}
+			if err != nil {
+				result.Failed++
+				failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+				failureErr := db.Failure(failureCtx, id, err.Error())
+				cancel()
+				if failureErr != nil {
+					return result, fmt.Errorf("record ticket failure: %w", failureErr)
+				}
+				continue
+			}
+			result.Fetched++
 		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		result.Remaining--
-		err := syncTicket(ctx, client, db, id)
-		if errors.Is(err, zoho.ErrOutsideDepartment) {
-			if err = db.StopSync(ctx, id); err != nil {
-				return result, err
-			}
-			result.Stopped++
-			continue
+		if rateLimit != nil {
+			return result, rateLimit
 		}
-		if err != nil {
-			result.Failed++
-			failureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			failureErr := db.Failure(failureCtx, id, err.Error())
-			cancel()
-			if failureErr != nil {
-				return result, fmt.Errorf("record ticket failure: %w", failureErr)
-			}
-			if ctx.Err() != nil {
-				return result, ctx.Err()
-			}
-			if zoho.RetryAfter(err) > 0 {
-				return result, err
-			}
-			continue
-		}
-		result.Fetched++
 	}
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -168,11 +208,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	return result, nil
 }
 
-func syncTicket(ctx context.Context, client *zoho.Client, db *store.Store, id string) error {
-	raw, err := client.Fetch(ctx, id)
-	if err != nil {
-		return err
-	}
+func saveTicket(ctx context.Context, db *store.Store, id string, raw ticket.RawSnapshot) error {
 	snapshot, err := ticket.Normalize(raw)
 	if err != nil {
 		return fmt.Errorf("normalize ticket: %w", err)
@@ -183,14 +219,14 @@ func syncTicket(ctx context.Context, client *zoho.Client, db *store.Store, id st
 			return err
 		}
 		if err == nil && previous.Complete {
-			return errors.New("conversation incomplete; previous complete snapshot retained")
+			return fmt.Errorf("conversation incomplete (%s); previous complete snapshot retained", strings.Join(snapshot.Warnings, ", "))
 		}
 	}
 	if err = db.Save(ctx, raw, snapshot); err != nil {
 		return fmt.Errorf("save ticket: %w", err)
 	}
 	if !snapshot.Complete {
-		return errors.New("conversation incomplete; partial snapshot saved")
+		return fmt.Errorf("conversation incomplete (%s); partial snapshot saved", strings.Join(snapshot.Warnings, ", "))
 	}
 	return nil
 }

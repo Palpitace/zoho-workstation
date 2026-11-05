@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 工单详情、按实际会话/参考版本计算的分析状态、请求计数及受保护操作（无累计额度门槛）。
+// output: 工单详情、实际输入版本分析状态、同步并发配置、调用计数和受保护操作。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -249,7 +249,7 @@ func (a *App) status(c *gin.Context) {
 		}
 	}
 	a.mu.Lock()
-	runtime := gin.H{"sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "development", "ai_scope_count": len(a.eligible), "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
+	runtime := gin.H{"sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "development", "ai_scope_count": len(a.eligible), "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
 	a.mu.Unlock()
 	c.JSON(200, gin.H{"sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round}})
 }

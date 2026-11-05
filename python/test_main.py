@@ -1,5 +1,5 @@
 # input: 合成会话、可选 Jev 参考、结构化模型结果和 SDK 模拟网络错误。
-# output: v3 可空分类、来源引用、完整会话及安全网络诊断的合成证据。
+# output: v4 单封来信/逐字摘录及可空分类、来源引用、完整会话及安全网络诊断的合成证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -17,12 +17,37 @@ from main import Snapshot, validate_summary, validation_diagnostics
 
 
 class SummaryContractTest(unittest.TestCase):
+    def test_single_incoming_message_without_support_reply(self):
+        for role, direction, visibility, status, text, accepted in (
+            ("customer", "in", "public", "SUCCESS", "Printing overlaps", True),
+            ("unknown", "in", "public", "SUCCESS", "Labels overlap", True),
+            ("unknown", "in", "public", "SUCCESS", "Customer confirmed a defect", False),
+            ("agent", "in", "public", "SUCCESS", "Labels overlap", False),
+            ("unknown", "in", "private", "SUCCESS", "Labels overlap", False),
+            ("unknown", "out", "public", "SUCCESS", "Labels overlap", False),
+            ("unknown", "in", "public", "DRAFT", "Labels overlap", False),
+        ):
+            snapshot = Snapshot.model_validate({
+                "conversation_hash": "synthetic", "jev_reference": None,
+                "messages": [{"id": "m1", "source": "thread", "role": role,
+                              "direction": direction, "visibility": visibility, "status": status,
+                              "body": "Feedback: Labels overlap\nDevice: synthetic"}],
+            })
+            result = json.dumps({"device_info": [], "customer_feedback": [
+                {"text": text, "message_ids": ["m1"]}], "support_responses": []})
+            with self.subTest(role=role, text=text, direction=direction, visibility=visibility, status=status):
+                if accepted:
+                    self.assertEqual(validate_summary(result, snapshot).support_responses, [])
+                else:
+                    with self.assertRaises(ValidationError):
+                        validate_summary(result, snapshot)
+
     def test_request_failures_have_safe_distinct_codes(self):
         payload = json.dumps({
             "input": {"conversation_hash": "synthetic", "jev_reference": None,
                       "messages": [{"id": "m1", "role": "customer", "body": "Help"}]},
             "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-            "schema_version": "bub-summary-v3",
+            "schema_version": "bub-summary-v4",
         }).encode()
         original = main.republic.get_model
         for error, expected in (
@@ -148,7 +173,7 @@ class SummaryContractTest(unittest.TestCase):
                             "messages": [{"id": "m1", "role": "customer", "body": "Help"}],
                         },
                         "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-                        "schema_version": "bub-summary-v3",
+                        "schema_version": "bub-summary-v4",
                     })
                     with patch.object(main.republic, "get_model", side_effect=configured):
                         result = await main.summarize(request)
@@ -212,7 +237,7 @@ class SummaryContractTest(unittest.TestCase):
                 request = main.Request.model_validate({
                     "input": source,
                     "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-key", "model": "deepseek:synthetic"},
-                    "schema_version": "bub-summary-v3",
+                    "schema_version": "bub-summary-v4",
                 })
                 async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond), trust_env=False) as client:
                     def configured(*args, **kwargs):

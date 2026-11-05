@@ -1,5 +1,5 @@
 // input: 完整脱敏会话及可选 Jev 参考、显式配置、固定 Python 环境和代理白名单。
-// output: 三类按需事实总结的结构/来源校验与模型标识，或安全分类错误。
+// output: 三类事实和未知作者入站原文摘录的校验与模型标识，或安全错误。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -17,7 +17,7 @@ import (
 	"zoho-workstation/internal/config"
 )
 
-const BubSchema = "bub-summary-v3"
+const BubSchema = "bub-summary-v4"
 
 type fact struct {
 	Text       string   `json:"text"`
@@ -36,6 +36,9 @@ func ValidateBub(result, input json.RawMessage) error {
 		MixedAuthors bool   `json:"mixed_authors"`
 		Visibility   string `json:"visibility"`
 		Status       string `json:"status"`
+		Source       string `json:"source"`
+		Direction    string `json:"direction"`
+		Body         string `json:"body"`
 	}
 	var source struct {
 		Product     string     `json:"product"`
@@ -87,7 +90,10 @@ func ValidateBub(result, input json.RawMessage) error {
 				}
 			}
 			if section == 1 && !customer {
-				return errors.New("Bub feedback lacks customer evidence")
+				m := messages[item.MessageIDs[0]]
+				if len(item.MessageIDs) != 1 || m.Role != "unknown" || m.Source != "thread" || m.Direction != "in" || m.Visibility != "public" || m.Status != "SUCCESS" || !strings.Contains(m.Body, text) {
+					return errors.New("Bub feedback lacks customer evidence or a verbatim incoming quote")
+				}
 			}
 			if section == 2 && !support {
 				return errors.New("Bub response lacks support evidence")

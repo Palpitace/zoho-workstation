@@ -1,5 +1,5 @@
 <!-- input: Go 同步进度、自动运行状态、独立 AI 数量及模型调用统计。 -->
-<!-- output: 当前部门、任务进度、失败状态和累计调用次数及不限额状态概览。 -->
+<!-- output: 当前部门、同步批次/并发、任务失败及累计调用状态概览。 -->
 <!-- pos: 运行状态页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -30,6 +30,9 @@
     </section>
     {#if status.runtime}
       <p class="text-sm text-muted-foreground">{status.runtime.automatic ? "自动任务已启用" : "自动任务未启用"}；{status.runtime.ai_scope === "development" ? `自动分析限于固定开发样本${status.runtime.ai_scope_count === undefined ? "" : `（${status.runtime.ai_scope_count} 张）`}` : "分析范围以当前服务配置为准"}。待处理数量不表示全部工单都会自动调用模型。</p>
+    {/if}
+    {#if status.runtime?.sync_batch_size && status.runtime?.sync_concurrency}
+      <p class="text-sm text-muted-foreground">同步每批最多 {status.runtime.sync_batch_size} 张工单，最多 {status.runtime.sync_concurrency} 张同时读取。</p>
     {/if}
     {#if status.budget}
       <section class="space-y-4 rounded-lg border p-5 sm:p-6" aria-labelledby="budget-title">

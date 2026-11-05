@@ -1,4 +1,4 @@
-// input: 合成 Zoho 接口、隔离数据库与长周期配置。
+// input: 合成 Zoho 接口、隔离数据库、显式串行批次及长周期配置。
 // output: 首轮批次自动接续、失败/限流等待及可取消关闭的行为证据。
 // pos: 同步调度生命周期回归测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
@@ -61,7 +61,7 @@ func TestSyncDrainsBatchesAndCancelsBackoff(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			cfg := config.Config{SyncInterval: time.Hour, SyncLookback: time.Hour, Zoho: config.Zoho{BaseURL: remote.URL, AccountsURL: remote.URL, DepartmentID: "7"}}
+			cfg := config.Config{SyncBatchSize: 3, SyncConcurrency: 1, SyncInterval: time.Hour, SyncLookback: time.Hour, Zoho: config.Zoho{BaseURL: remote.URL, AccountsURL: remote.URL, DepartmentID: "7"}}
 			service, err := app.New(cfg, db, zoho.New(cfg.Zoho, remote.Client()))
 			if err != nil {
 				t.Fatal(err)

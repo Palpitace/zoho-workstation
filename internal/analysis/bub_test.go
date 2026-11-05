@@ -1,5 +1,5 @@
 // input: 合成 Bub JSON、固定消息引用、隔离子进程及本地模拟代理。
-// output: 三类可空总结的来源约束、必要代理继承及凭据环境隔离证据。
+// output: 单封来信/未知作者逐字证据及三类来源约束、必要代理继承及凭据环境隔离证据。
 // pos: Python 输出进入 Go 的验证边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis_test
 
@@ -88,5 +88,28 @@ func TestBubSubprocessUsesProxyWithoutInheritingCredentials(t *testing.T) {
 	_, _, err = analysis.Bub(ctx, config.Model{URL: "https://model.invalid", Key: "synthetic-key", Name: "deepseek:synthetic"}, input)
 	if connects.Load() != 1 || err == nil || err.Error() != "Bub: model_connection_failed" {
 		t.Fatalf("proxy requests=%d, safe error=%v", connects.Load(), err)
+	}
+}
+
+func TestBubSingleIncomingMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, role, direction, visibility, status, text string
+		ok                                              bool
+	}{
+		{"customer without reply", "customer", "in", "public", "SUCCESS", "Printing overlaps", true},
+		{"unknown verbatim", "unknown", "in", "public", "SUCCESS", "Labels overlap", true},
+		{"unknown paraphrase", "unknown", "in", "public", "SUCCESS", "Customer confirmed a defect", false},
+		{"agent is not customer", "agent", "in", "public", "SUCCESS", "Labels overlap", false},
+		{"private unknown", "unknown", "in", "private", "SUCCESS", "Labels overlap", false},
+		{"outgoing unknown", "unknown", "out", "public", "SUCCESS", "Labels overlap", false},
+		{"unsent unknown", "unknown", "in", "public", "DRAFT", "Labels overlap", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, _ := json.Marshal(map[string]any{"messages": []map[string]any{{"id": "m1", "source": "thread", "role": tc.role, "direction": tc.direction, "visibility": tc.visibility, "status": tc.status, "body": "Feedback: Labels overlap\nDevice: synthetic"}}})
+			result, _ := json.Marshal(map[string]any{"device_info": []any{}, "customer_feedback": []map[string]any{{"text": tc.text, "message_ids": []string{"m1"}}}, "support_responses": []any{}})
+			if err := analysis.ValidateBub(result, input); (err == nil) != tc.ok {
+				t.Fatalf("accepted=%t want=%t: %v", err == nil, tc.ok, err)
+			}
+		})
 	}
 }

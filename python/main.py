@@ -1,5 +1,5 @@
 # input: stdin 中完整脱敏会话、可选 Jev 参考、最小模型配置、Schema 和允许的代理环境。
-# output: stdout 三类按需事实总结、引用或安全诊断；空项不编造，来源元信息独立保留。
+# output: 三类事实及未知作者入站原文摘录、引用或安全诊断，不推断作者身份。
 # pos: Go 到无工具 Bub Core 的固定进程入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -135,6 +135,8 @@ class EvidenceMessage(BaseModel):
     mixed_authors: bool = False
     visibility: str = "unknown"
     status: str = ""
+    source: str = ""
+    direction: str = ""
 
 
 class JevReference(StrictModel):
@@ -165,7 +167,7 @@ class Snapshot(BaseModel):
 class Request(StrictModel):
     input: Snapshot
     config: ModelConfig
-    schema_version: Literal["bub-summary-v3"]
+    schema_version: Literal["bub-summary-v4"]
 
 
 class Fact(StrictModel):
@@ -198,7 +200,14 @@ class Summary(StrictModel):
                 if section == "customer_feedback" and not any(
                     message.role == "customer" or message.mixed_authors for message in cited
                 ):
-                    raise ContractIssue("missing_customer_evidence")
+                    message = cited[0]
+                    if not (
+                        len(cited) == 1 and message.role == "unknown"
+                        and message.source == "thread" and message.direction == "in"
+                        and message.visibility == "public" and message.status == "SUCCESS"
+                        and item.text in message.body
+                    ):
+                        raise ContractIssue("missing_customer_evidence")
                 if section == "support_responses" and (
                     not any(message.role == "agent" or message.mixed_authors for message in cited)
                     or any(message.visibility == "private" or message.status.upper() in {"DRAFT", "FAILED", "PENDING"} for message in cited)
@@ -223,7 +232,11 @@ input.jev_reference 是可选的独立模型评估参考，不是工单事实，
 3. support_responses：客服已经回复的内容或已经给予的排查建议。只总结已有回复，不新增模型下一步建议。
 通常每条必须引用支持它的真实消息 ID。device_info 只有来自工单 product/description 字段时可用空 message_ids：
 此时 text 必须逐字等于 product，或逐字摘录 description 中明确设备信息的片段，不能改写、拼接或截去否定/条件从而改变含义。
-客户反馈必须有客户发言证据；客服回复必须有客服发言证据。内部备注、草稿、发送失败或等待发送的内容不放入 support_responses，不能当成客户已收到的回复。
+客户反馈通常必须有客户发言证据；客服回复必须有客服发言证据。内部备注、草稿、发送失败或等待发送的内容不放入 support_responses，不能当成客户已收到的回复。
+唯一例外：role=unknown、source=thread、direction=in、visibility=public、status=SUCCESS 的消息，可以在 customer_feedback 逐字摘录反馈原文。
+该例外每项只能引用这一条消息，text 必须是 body 中连续的原文片段，不翻译、不改写、不添加“客户说”等前缀，不剪掉否定或条件；选完整的问题描述句，避免摘录联系人或模板签名。
+这只是作者未确认的来信摘录，不把未知角色改成客户。其他 unknown 消息没有这个例外，客服转述也不能伪装成客户来信。
+仅有一封来信也可以输出反馈；没有客服回复就令 support_responses=[]，不编造客服排查或客户执行。
 混合作者转录 mixed_authors=true 中不能把整段归给消息外层 role；只按明确说话者逐句归属，不明确则不写入相应分类。
 严格区分客服提出建议、客户明确确认执行及客户报告执行结果。客服建议升级固件不能写成客户已升级。
 客户未确认执行时只能说“客服建议……”，不能推断已经执行或有效；客户执行及结果放入 customer_feedback 并引用客户原文。
