@@ -37,3 +37,5 @@ Finish 的 watermark 非空表示候选已全部处理（允许存在独立持�
 Bub→Jev 调度仅使用当前成功结果；已移除无业务消费者的 HasFinishedAttempt 派生字段，不新增持久化结构。
 
 SQLite file URI 使用正斜杠与 Windows 盘符前缀斜杠，实际锁文件仍使用规范化原生路径，支持解压目录中的空格。
+
+Analysis 在原有历史扫描中计算当前签名的失败次数与最近失败时间，不额外查表。retry_exhausted 只对最新 failed 且失败累计至少两次返回 true；最新 running/success 或输入/Schema/模型改变均不显示旧耗尽。last_failed_at 保留便于追溯，不修改历史，不引入部署版本或自动重置重试计数。

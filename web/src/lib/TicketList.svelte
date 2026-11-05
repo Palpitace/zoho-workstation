@@ -1,21 +1,22 @@
 <!-- input: Go 工单记录及附带 AI 状态、查询条件和查询回调。 -->
-<!-- output: 表头状态/产品筛选、Zoho 工单号链接、三列 Jev 结果及紧凑对齐的 AI 状态。 -->
+<!-- output: AI 重试原因与失败时间提示； 顶部字段/日期搜索、五列 Combobox 筛选和一键清除，以及工单与 AI 状态列表。 -->
 <!-- pos: 工单列表页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
-  import { Search, ListFilter } from "@lucide/svelte";
+  import { Search, RotateCcw } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
+  import FilterCombobox from "./FilterCombobox.svelte";
   import * as Table from "$lib/components/ui/table/index.js";
-  import { aiLabel, dateTime, jevChoice, syncLabel, ticketURL, type TicketRecord, type AIKind } from "./api";
+  import { aiLabel, failureHint, dateTime, jevChoice, syncLabel, ticketURL, type TicketRecord, type AIKind, type SearchFilters, type FilterSelection, type FilterOptions, type FilterKey } from "./api";
   const kinds: AIKind[] = ["jev", "bub"];
 
-  let { records, loading, error, query = $bindable(""), statusFilter = $bindable(""), productFilter = $bindable(""), statusOptions, productOptions, onSearch }: {
-    records: TicketRecord[]; loading: boolean; error: string; query?: string;
-    statusFilter?: string; productFilter?: string; statusOptions: string[]; productOptions: string[]; onSearch: () => void;
+  let { records, loading, error, hasAppliedFilters, search = $bindable(), showHistory = $bindable(false), filters, filterOptions, onSearch, onFilter, onClear, onHistory }: {
+    records: TicketRecord[]; loading: boolean; error: string; hasAppliedFilters: boolean; search: SearchFilters; showHistory?: boolean;
+    filters: FilterSelection; filterOptions: FilterOptions; onSearch: () => void;
+    onFilter: (key: FilterKey, value: string) => void; onClear: () => void; onHistory: () => void;
   } = $props();
-  let showHistory = $state(false);
-  const visibleRecords = $derived(records.filter((record) => showHistory || !record.sync_stopped));
+  const selectClass = "border-input bg-background h-9 rounded-md border px-2 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 </script>
 
 <section aria-labelledby="page-title" class="space-y-6">
@@ -24,13 +25,30 @@
     <p class="mt-2 text-sm text-muted-foreground">查看当前部门已选取的工单和沟通记录。</p>
   </div>
 
+  <form aria-label="组合搜索工单" class="flex flex-wrap items-center gap-2" onsubmit={(event) => { event.preventDefault(); onSearch(); }}>
+    <select aria-label="搜索字段" bind:value={search.field} class={selectClass}>
+      <option value="all">全部字段</option><option value="subject">工单标题</option><option value="ticket_number">工单号</option><option value="id">工单 ID</option><option value="product">产品/机型</option>
+    </select>
+    <Input aria-label="搜索关键词" placeholder="标题 / 工单号 / ID / 机型" bind:value={search.q} class="h-9 w-64 min-w-40 flex-1" />
+    <select aria-label="日期字段" bind:value={search.dateField} class={selectClass}>
+      <option value="first_incoming">首份来信时间</option><option value="created">工单创建时间</option><option value="updated">最近更新时间</option>
+    </select>
+    <div class="flex items-center gap-2">
+      <Input type="date" aria-label="开始日期" bind:value={search.startDate} max={search.endDate || undefined} class="h-9 w-36" />
+      <span class="text-muted-foreground">至</span>
+      <Input type="date" aria-label="结束日期" bind:value={search.endDate} min={search.startDate || undefined} class="h-9 w-36" />
+    </div>
+    <Button type="submit" size="sm" disabled={loading}><Search size={14} aria-hidden="true" />查询</Button>
+    <Button type="button" variant="ghost" size="sm" class="ml-auto" onclick={onClear}><RotateCcw size={14} aria-hidden="true" />清除筛选</Button>
+  </form>
+
   <label class="flex items-center gap-2 text-sm text-muted-foreground">
-    <input type="checkbox" bind:checked={showHistory} class="size-4 accent-primary" />
+    <input type="checkbox" bind:checked={showHistory} onchange={(event) => { showHistory = event.currentTarget.checked; onHistory(); }} class="size-4 accent-primary" />
     显示已合并、删除或移出部门的历史工单
   </label>
 
   <div aria-live="polite" class="text-sm text-muted-foreground">
-    {loading ? "正在读取工单…" : `当前显示 ${visibleRecords.length} 张工单`}
+    {loading ? "正在读取工单…" : `当前显示 ${records.length} 张工单`}
   </div>
   {#if error}
     <p role="alert" class="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</p>
@@ -40,37 +58,19 @@
     <Table.Root>
       <Table.Header>
         <Table.Row>
-          <Table.Head class="min-w-64 pl-5">
-            <details class="py-2">
-              <summary class="w-fit cursor-pointer list-none rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span class="inline-flex items-center gap-1.5">工单<ListFilter size={14} class={query ? "text-foreground" : "text-muted-foreground"} aria-hidden="true" /></span></summary>
-              <form class="mt-2 flex items-center gap-2" onsubmit={(event) => { event.preventDefault(); onSearch(); }}>
-                <Input id="ticket-query" aria-label="筛选工单标题" class="h-8 min-w-32" placeholder="标题关键词" bind:value={query} />
-                <Button type="submit" size="sm" variant="outline" disabled={loading} aria-label="应用标题筛选"><Search size={14} aria-hidden="true" /></Button>
-              </form>
-            </details>
-          </Table.Head>
-          <Table.Head>
-            <select id="status-filter" aria-label="筛选工单状态" bind:value={statusFilter} onchange={(event) => { statusFilter = event.currentTarget.value; onSearch(); }} class="h-9 max-w-40 cursor-pointer rounded-sm border-0 bg-transparent pr-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <option value="">状态 · 全部</option>
-              {#each statusOptions as option}<option value={option}>{option}</option>{/each}
-            </select>
-          </Table.Head>
-          <Table.Head class="min-w-32">
-            <select id="product-filter" aria-label="筛选产品" bind:value={productFilter} onchange={(event) => { productFilter = event.currentTarget.value; onSearch(); }} class="h-9 max-w-44 cursor-pointer rounded-sm border-0 bg-transparent pr-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <option value="">产品 · 全部</option>
-              {#each productOptions as option}<option value={option || "__missing__"}>{option || "未提供"}</option>{/each}
-            </select>
-          </Table.Head>
+          <Table.Head class="min-w-64 pl-5">工单</Table.Head>
+          <Table.Head><FilterCombobox label="状态" field="status" value={filters.status} options={filterOptions.status || []} onSelect={(value) => onFilter("status", value)} /></Table.Head>
+          <Table.Head><FilterCombobox label="产品" field="product" value={filters.product} options={filterOptions.product || []} onSelect={(value) => onFilter("product", value)} /></Table.Head>
           <Table.Head class="min-w-40">更新时间</Table.Head>
-          <Table.Head>同步</Table.Head>
-          <Table.Head class="min-w-24">情绪</Table.Head>
-          <Table.Head class="min-w-20">优先级</Table.Head>
+          <Table.Head><FilterCombobox label="同步" field="sync_status" value={filters.sync_status} options={filterOptions.sync_status || []} onSelect={(value) => onFilter("sync_status", value)} /></Table.Head>
+          <Table.Head><FilterCombobox label="情绪" field="emotion" value={filters.emotion} options={filterOptions.emotion || []} onSelect={(value) => onFilter("emotion", value)} /></Table.Head>
+          <Table.Head><FilterCombobox label="优先级" field="priority" value={filters.priority} options={filterOptions.priority || []} onSelect={(value) => onFilter("priority", value)} /></Table.Head>
           <Table.Head class="min-w-24">问题分类</Table.Head>
           <Table.Head class="min-w-32 pr-5">AI 状态</Table.Head>
         </Table.Row>
       </Table.Header>
       <Table.Body>
-        {#each visibleRecords as record (record.id)}
+        {#each records as record (record.id)}
           {@const link = ticketURL(record.web_url)}
           <Table.Row>
             <Table.Cell class="max-w-xl py-4 pl-5 whitespace-normal">
@@ -95,14 +95,14 @@
                 {#each kinds as kind}
                   {@const state = record.ai?.[kind]}
                   <span class="text-muted-foreground">{kind === "jev" ? "Jev" : "Bub"}</span>
-                  <Badge class="w-fit rounded px-1.5 py-0 text-[11px] whitespace-nowrap" variant={state?.status === "failed" && !record.sync_stopped ? "destructive" : "secondary"} title={state?.error || (state?.stale ? "已有结果过期，等待或正在处理当前会话" : undefined)}>{record.sync_stopped ? "已停止" : aiLabel(state)}</Badge>
+                  <Badge class="w-fit rounded px-1.5 py-0 text-[11px] whitespace-nowrap" variant={state?.status === "failed" && !record.sync_stopped ? "destructive" : "secondary"} title={state ? [state.waiting_reason, state.status === "failed" ? failureHint(state) : "", state.error, state.stale ? "已有结果过期，等待或正在处理当前会话" : ""].filter(Boolean).join("\n") : undefined}>{record.sync_stopped ? "已停止" : aiLabel(state)}</Badge>
                 {/each}
               </div>
             </Table.Cell>
           </Table.Row>
         {:else}
           <Table.Row><Table.Cell colspan={9} class="h-36 text-center text-muted-foreground">
-            {loading ? "正在加载…" : error ? "暂无可显示数据。" : query || statusFilter || productFilter ? "没有符合条件的工单，请调整表头筛选。" : records.length ? "当前没有有效工单，可勾选查看历史工单。" : "尚未同步工单。同步完成后会显示在这里。"}
+            {loading ? "正在加载…" : error ? "暂无可显示数据。" : hasAppliedFilters ? "没有符合条件的工单，请调整搜索或表头筛选。" : "当前没有可显示的工单。可检查同步状态，或勾选查看历史工单。"}
           </Table.Cell></Table.Row>
         {/each}
       </Table.Body>

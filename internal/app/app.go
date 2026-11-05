@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 有界同步及 Bub→Jev 调度；本地环境故障在请求计数前阻断 Bub，不阻塞同步。
+// output: 有界同步及 Bub→Jev 调度、显式确认的一次恢复；环境故障在计数前阻断 Bub。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -33,6 +33,8 @@ type App struct {
 	busy            map[string]bool
 	lastError       map[string]string
 	analysisWake    chan struct{}
+	recovery        map[string]map[string]int64
+	startedAt       string
 	releases        []func()
 	wg              sync.WaitGroup
 }
@@ -56,7 +58,7 @@ func New(cfg config.Config, db *store.Store, client *zoho.Client) (*App, error) 
 	if cfg.SyncBatchSize < 1 || cfg.SyncBatchSize > 50 || cfg.SyncConcurrency < 1 || cfg.SyncConcurrency > 5 {
 		return nil, errors.New("invalid sync batch size or concurrency")
 	}
-	return &App{cfg: cfg, db: db, zoho: client, csrf: hex.EncodeToString(token[:]), busy: map[string]bool{}, lastError: map[string]string{}, analysisWake: make(chan struct{}, 1)}, nil
+	return &App{cfg: cfg, db: db, zoho: client, csrf: hex.EncodeToString(token[:]), busy: map[string]bool{}, lastError: map[string]string{}, analysisWake: make(chan struct{}, 1), recovery: map[string]map[string]int64{}}, nil
 }
 
 // Start is called only after the HTTP listener is successfully acquired.
@@ -86,6 +88,7 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.ctx, a.cancel = context.WithCancel(ctx)
 	a.started = true
+	a.startedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	a.wg.Add(1)
 	go a.loop()
 	return nil
@@ -224,6 +227,9 @@ func (a *App) scheduleAnalysis() {
 		}
 		for _, record := range records {
 			if !automaticallyEligible(record) {
+				a.mu.Lock()
+				delete(a.recovery[kind], record.ID)
+				a.mu.Unlock()
 				continue
 			}
 			started, err := a.startAnalysis(record.ID, kind, false)
@@ -275,6 +281,9 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	if prepareErr == nil && kind == "jev" && len(input) > 24*1024 {
 		prepareErr = errors.New("Jev summary input exceeds 24 KiB; input was not truncated")
 	}
+	if prepareErr != nil {
+		delete(a.recovery[kind], id)
+	}
 	if errors.Is(prepareErr, errAwaitingBub) {
 		if force {
 			return false, prepareErr
@@ -288,6 +297,21 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 			}
 		}
 		return false, prepareErr
+	}
+	// A confirmation names a specific failed run, not future versions of a ticket.
+	if runID, queued := a.recovery[kind][id]; queued {
+		record, err := a.db.Get(a.ctx, id)
+		if err != nil {
+			return false, err
+		}
+		view, err := a.db.Analysis(a.ctx, req)
+		if err != nil {
+			return false, err
+		}
+		delete(a.recovery[kind], id)
+		if automaticallyEligible(record) && view.RetryExhausted && view.Current.ID == runID {
+			force = true
+		}
 	}
 	// Keep the exact redacted bytes used by both capabilities, never the raw input.
 	if err = saveInput(req.InputHash, input); err != nil {

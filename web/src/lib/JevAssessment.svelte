@@ -1,10 +1,10 @@
 <!-- input: Jev 结果、独立操作反馈和重新评估回调。 -->
-<!-- output: 区分等待总结/未知/失败/过期的评估及重新评估入口，无结果来源面板或说明注脚。 -->
+<!-- output: 重试耗尽/失败时间提示； 区分等待总结/未知/失败/过期的评估及重新评估入口，无结果来源面板或说明注脚。 -->
 <!-- pos: 工单详情中的 Jev 展示边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { type JevView, type ActionFeedback } from "./api";
+  import { failureHint, type JevView, type ActionFeedback } from "./api";
   let { view, loading, error, control, onRerun }: { view: JevView | null; loading: boolean; error: string; control: ActionFeedback; onRerun: () => void } = $props();
   const fields = [
     ["priority", "建议优先级"], ["severity", "问题严重程度"],
@@ -47,6 +47,8 @@
   {#if control.notice}<p role="status" class="text-sm text-muted-foreground">{control.notice}</p>{/if}
   {#if loading}<p role="status" class="text-sm text-muted-foreground">正在读取评估…</p>{/if}
   {#if error}<p role="alert" class="text-sm text-destructive">评估暂不可读：{error}</p>{/if}
+  {#if failed && view && failureHint(view)}<p class="text-sm text-muted-foreground">{failureHint(view)}</p>{/if}
+  {#if view?.waiting_reason}<p class="text-sm text-muted-foreground">{view.waiting_reason}</p>{/if}
   {#if view?.current?.error}<p role="alert" class="text-sm break-words text-destructive">{view.current.error}</p>{/if}
   {#if view?.stale}<p class="text-sm text-muted-foreground">以下是旧输入或旧配置对应的成功结果，不代表当前会话。</p>
   {:else if view?.success && failed}<p class="text-sm text-muted-foreground">保留上次成功评估，最近失败未覆盖已有结果。</p>{/if}

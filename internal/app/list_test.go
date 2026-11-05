@@ -1,5 +1,5 @@
 // input: 合成旧格式快照、Zoho 工单号/链接、Jev 分类结果和 HTTP 筛选请求。
-// output: 列表真实工单身份、独立分析状态及组合下拉筛选的公开接口证据。
+// output: 字段/日期/五列表头组合筛选、稳定计数、首份来信边界和历史显示证据。
 // pos: 工单列表 API 回归测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -64,6 +65,10 @@ func TestTicketListIdentityFiltersAndClassification(t *testing.T) {
 		count int
 	}{
 		{"", 3}, {"?product=P1", 1}, {"?product=P1&status=Closed", 0}, {"?status=Open", 2}, {"?product=__missing__", 1}, {"?q=absent", 0},
+		{"?q=%23101", 1}, {"?q=p1", 1}, {"?q=10&field=ticket_number", 0},
+		{"?q=1&field=id", 1}, {"?q=p&field=product", 2}, {"?q=SYNTH&field=subject", 3},
+		{"?emotion=neutral", 1}, {"?emotion=unknown", 2}, {"?priority=high&status=Open&product=P1", 1},
+		{"?priority=high&emotion=angry", 0}, {"?sync_status=synced", 3}, {"?sync_status=failed", 0},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/api/tickets"+tc.query, nil)
@@ -81,7 +86,10 @@ func TestTicketListIdentityFiltersAndClassification(t *testing.T) {
 						Eligible bool   `json:"automatic_eligible"`
 					} `json:"ai"`
 				} `json:"data"`
-				Filters struct{ Statuses, Products []string } `json:"filters"`
+				Filters map[string][]struct {
+					Value string `json:"value"`
+					Count int    `json:"count"`
+				} `json:"filters"`
 			}
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil {
 				t.Fatalf("list HTTP %d", w.Code)
@@ -89,8 +97,17 @@ func TestTicketListIdentityFiltersAndClassification(t *testing.T) {
 			if len(got.Data) != tc.count {
 				t.Fatalf("filter returned %d, want %d", len(got.Data), tc.count)
 			}
-			if len(got.Filters.Statuses) != 2 || len(got.Filters.Products) != 3 {
+			if len(got.Filters["status"]) != 2 || len(got.Filters["product"]) != 3 {
 				t.Fatal("filters must include choices outside current result")
+			}
+			for _, key := range []string{"status", "product", "emotion", "priority", "sync_status"} {
+				count := 0
+				for _, choice := range got.Filters[key] {
+					count += choice.Count
+				}
+				if count != 3 {
+					t.Fatalf("%s facet counts changed with search: %d", key, count)
+				}
 			}
 			for _, r := range got.Data {
 				switch r.ID {
@@ -109,5 +126,149 @@ func TestTicketListIdentityFiltersAndClassification(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTicketDateSearch(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "app.db"), "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Reserve(ctx, []string{"1", "2", "3"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"1", "2", "3"} {
+		messages := []ticket.Message{
+			{ID: "private", Source: "comment", Visibility: "private", Direction: "in", CreatedTime: "2026-11-01T00:00:00Z"},
+			{ID: "agent", Source: "thread", Role: "agent", Visibility: "public", Direction: "in", CreatedTime: "2026-11-01T00:00:00Z"},
+		}
+		if id != "3" {
+			at := "2026-11-04T16:00:00Z"
+			if id == "2" {
+				at = "2026-11-05T16:00:00Z"
+			}
+			messages = append(messages, ticket.Message{ID: "customer", Source: "thread", Visibility: "public", Direction: "in", Role: "unknown", CreatedTime: at})
+		}
+		snapshot := ticket.Snapshot{ID: id, DepartmentID: "7", Subject: "Printer", Product: "P1", Status: "Open", Complete: true,
+			CreatedTime: "2026-11-01T00:00:00Z", ModifiedTime: "2026-11-06T00:00:00Z", Messages: messages}
+		if err := db.Save(ctx, ticket.RawSnapshot{Ticket: json.RawMessage(`{}`)}, snapshot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service, err := app.New(config.Config{Port: "8080", SyncInterval: time.Hour}, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		field, from, until string
+		count, code        int
+	}{
+		{"first_incoming", "2026-11-05T00:00:00+08:00", "2026-11-06T00:00:00+08:00", 1, 200},
+		{"first_incoming", "2026-11-05T16:00:00Z", "", 1, 200},
+		{"created", "2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z", 3, 200},
+		{"updated", "2026-11-06T00:00:00Z", "", 3, 200},
+		{"first_incoming", "invalid", "", 0, 400},
+		{"first_incoming", "2026-11-06T00:00:00Z", "2026-11-05T00:00:00Z", 0, 400},
+		{"invalid", "", "", 0, 400},
+	} {
+		query := url.Values{"date_field": {tc.field}, "from": {tc.from}, "until": {tc.until}, "q": {"printer"}, "status": {"Open"}, "product": {"P1"}}
+		req := httptest.NewRequest("GET", "/api/tickets?"+query.Encode(), nil)
+		req.Host = "localhost:8080"
+		w := httptest.NewRecorder()
+		service.Handler().ServeHTTP(w, req)
+		if w.Code != tc.code {
+			t.Fatalf("%+v: HTTP %d", tc, w.Code)
+		}
+		if tc.code != 200 {
+			continue
+		}
+		var got struct {
+			Data []struct {
+				ID    string `json:"id"`
+				First string `json:"first_incoming_time"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Data) != tc.count {
+			t.Fatalf("%+v: count=%d", tc, len(got.Data))
+		}
+		for _, r := range got.Data {
+			if (r.ID == "3") != (r.First == "") {
+				t.Fatalf("first incoming must not use creation/agent/private times: %+v", r)
+			}
+		}
+	}
+}
+
+func TestTicketSyncFiltersAndHistory(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "app.db"), "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ids := []string{"pending", "failed", "incomplete", "synced", "merged", "deleted", "stopped"}
+	if err := db.Reserve(ctx, ids); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if id != "pending" {
+			if err := db.Save(ctx, ticket.RawSnapshot{Ticket: json.RawMessage(`{}`)}, ticket.Snapshot{ID: id, DepartmentID: "7", Complete: id != "incomplete"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		switch id {
+		case "failed":
+			err = db.Failure(ctx, id, "synthetic failure")
+		case "merged":
+			err = db.StopSync(ctx, id, "ticket confirmed merged in Zoho")
+		case "deleted":
+			err = db.StopSync(ctx, id, "ticket confirmed deleted in Zoho")
+		case "stopped":
+			err = db.StopSync(ctx, id, "ticket no longer in configured department")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	service, err := app.New(config.Config{Port: "8080", SyncInterval: time.Hour}, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		req := httptest.NewRequest("GET", "/api/tickets?sync_status="+id+"&show_history=true", nil)
+		req.Host = "localhost:8080"
+		w := httptest.NewRecorder()
+		service.Handler().ServeHTTP(w, req)
+		var got struct {
+			Data []struct{ ID, SyncStatus string } `json:"data"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got.Data) != 1 || got.Data[0].ID != id {
+			t.Fatalf("%s sync filter failed: %s", id, w.Body.String())
+		}
+	}
+	req := httptest.NewRequest("GET", "/api/tickets?show_history=false", nil)
+	req.Host = "localhost:8080"
+	w := httptest.NewRecorder()
+	service.Handler().ServeHTTP(w, req)
+	var got struct {
+		Data    []json.RawMessage `json:"data"`
+		Filters map[string][]struct {
+			Count int `json:"count"`
+		} `json:"filters"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got.Data) != 4 {
+		t.Fatal("history visibility was not applied")
+	}
+	count := 0
+	for _, c := range got.Filters["sync_status"] {
+		count += c.Count
+	}
+	if count != 4 {
+		t.Fatal("facet counts include hidden history")
 	}
 }

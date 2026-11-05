@@ -1,5 +1,5 @@
 <!-- input: 浏览器导航、Go 查询/操作 API 及会话防护令牌。 -->
-<!-- output: 支持表头状态/产品筛选及 Bub→Jev的工单界面、受控人工操作（无累计额度拦截）及可见页面的轻量进度刷新。 -->
+<!-- output: 组合搜索草稿/已应用条件隔离、五列表头筛选和历史开关、独立页面加载与可见页面定期刷新。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onMount, untrack } from "svelte";
@@ -8,7 +8,7 @@
   import TicketList from "$lib/TicketList.svelte";
   import TicketDetail from "$lib/TicketDetail.svelte";
   import RunStatus from "$lib/RunStatus.svelte";
-  import { getJSON, postAction, type TicketRecord, type SystemStatus, type JevView, type BubView, type AIKind, type Operation } from "$lib/api";
+  import { getJSON, postAction, type TicketRecord, type SystemStatus, type JevView, type BubView, type AIKind, type Operation, type FilterOptions, type FilterKey, type SearchFilters, defaultSearch, emptyFilters } from "$lib/api";
 
   let hash = $state(window.location.hash);
   const ticketID = $derived(hash.startsWith("#/tickets/") ? hash.slice("#/tickets/".length) : "");
@@ -20,11 +20,10 @@
   let bub = $state<BubView | null>(null);
   let analysisLoading = $state(false);
   let analysisError = $state("");
-  let query = $state("");
-  let statusFilter = $state("");
-  let productFilter = $state("");
-  let productOptions = $state<string[]>([]);
-  let statusOptions = $state<string[]>([]);
+  let search = $state<SearchFilters>(defaultSearch());
+  let filters = $state(emptyFilters());
+  let filterOptions = $state<FilterOptions>({});
+  let showHistory = $state(false);
   let loading = $state(false);
   let detailLoading = $state(false);
   let listError = $state("");
@@ -38,9 +37,7 @@
   let pollController: AbortController | undefined;
   let refreshing = false;
   let polling = false;
-  let appliedQuery = "";
-  let appliedStatusFilter = "";
-  let appliedProductFilter = "";
+  let appliedSearch = $state<SearchFilters>(defaultSearch());
   const actionRequests = new Map<Operation, AbortController>();
 
   function errorText(error: unknown): string {
@@ -71,17 +68,21 @@
     const signal = controller.signal;
     refreshing = true;
     loading = !silent;
-    if (!silent) { appliedQuery = query; appliedStatusFilter = statusFilter; appliedProductFilter = productFilter; }
-    const params = new URLSearchParams({ q: appliedQuery, status: appliedStatusFilter, product: appliedProductFilter });
+    const params = new URLSearchParams({ q: appliedSearch.q, field: appliedSearch.field, date_field: appliedSearch.dateField, ...filters, show_history: String(showHistory) });
+    for (const [key, date] of [["from", appliedSearch.startDate], ["until", appliedSearch.endDate]]) {
+      if (!date) continue;
+      const boundary = new Date(`${date}T00:00:00`);
+      if (key === "until") boundary.setDate(boundary.getDate() + 1);
+      params.set(key, boundary.toISOString());
+    }
     const [ticketsResult, statusResult] = await Promise.allSettled([
-      !ticketID && !statusPage ? getJSON<{ data: TicketRecord[]; filters: { statuses: string[]; products: string[] } }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
+      !ticketID && !statusPage ? getJSON<{ data: TicketRecord[]; filters: FilterOptions }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
       knownStatus ? Promise.resolve(knownStatus) : getJSON<SystemStatus>("/api/status", signal),
     ]);
     if (signal.aborted) return;
     if (ticketsResult.status === "fulfilled" && ticketsResult.value) {
       records = ticketsResult.value.data;
-      statusOptions = ticketsResult.value.filters.statuses;
-      productOptions = ticketsResult.value.filters.products;
+      filterOptions = ticketsResult.value.filters;
       listError = "";
     } else if (ticketsResult.status === "rejected") listError = errorText(ticketsResult.reason);
     if (statusResult.status === "fulfilled") { status = statusResult.value; statusError = ""; }
@@ -90,9 +91,22 @@
     revision++;
   }
 
-  function progress(value: SystemStatus | null): string {
-    return JSON.stringify(value ? { sync: value.sync, runtime: value.runtime, ai: value.ai, budget: value.budget } : null);
+  function applySearch() {
+    appliedSearch = { ...search };
+    void refresh();
   }
+  function applyFilter(key: FilterKey, value: string) {
+    filters = { ...filters, [key]: value };
+    void refresh();
+  }
+  function clearFilters() {
+    search = defaultSearch();
+    appliedSearch = defaultSearch();
+    filters = emptyFilters();
+    showHistory = false;
+    void refresh();
+  }
+
   async function poll() {
     if (document.visibilityState !== "visible" || polling || refreshing || detailLoading || analysisLoading) return;
     polling = true;
@@ -101,10 +115,10 @@
     try {
       const next = await getJSON<SystemStatus>("/api/status", signal);
       if (signal.aborted) return;
-      const changed = progress(next) !== progress(status);
       status = next;
       statusError = "";
-      if (changed && !statusPage) await refresh(true, next);
+      // Aggregate counts can stay identical while individual rows change.
+      if (!statusPage) await refresh(true, next);
     } catch (error) { if (!signal.aborted) statusError = errorText(error); }
     finally { polling = false; }
   }
@@ -200,11 +214,11 @@
       {/if}
       {#if !statusPage && statusError}<p role="alert" class="mb-5 text-sm text-destructive">运行状态：{statusError}</p>{/if}
       {#if statusPage}
-        <RunStatus {status} {loading} error={statusError} />
+        <RunStatus {status} {loading} error={statusError} onRefresh={() => refresh(true)} />
       {:else if ticketID}
         <TicketDetail ticket={detail} loading={detailLoading} error={detailError} {jev} {bub} {analysisLoading} {analysisError} {controls} onRerun={(kind: AIKind) => operate(kind)} />
       {:else}
-        <TicketList {records} {loading} error={listError} bind:query bind:statusFilter bind:productFilter {statusOptions} {productOptions} onSearch={() => refresh()} />
+        <TicketList {records} {loading} error={listError} hasAppliedFilters={Boolean(appliedSearch.q || appliedSearch.startDate || appliedSearch.endDate || Object.values(filters).some(Boolean))} bind:search bind:showHistory {filters} {filterOptions} onSearch={applySearch} onFilter={applyFilter} onClear={clearFilters} onHistory={() => refresh()} />
       {/if}
     </main>
   </div>

@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单号/安全链接、分类与含等待总结的紧凑分析状态及调用计数类型、可取消查询和受保护操作。
+// output: 工单/筛选契约、重试耗尽与恢复候选、带防护的同源请求能力。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -41,6 +41,8 @@ export type Ticket = {
 export type TicketRecord = Ticket & {
   ticket_number?: string;
   web_url?: string;
+  first_incoming_time?: string;
+  sync_status?: string;
   pending: boolean;
   sync_stopped: boolean;
   sync_error?: string;
@@ -54,14 +56,21 @@ export type AIState = {
   status: "waiting" | "pending" | "running" | "failed" | "success" | "disabled";
   stale: boolean;
   automatic_eligible?: boolean;
+  retry_exhausted?: boolean;
+  last_failed_at?: string;
+  failure_before_start?: boolean;
+  waiting_reason?: string;
   priority?: string;
   emotion?: string;
   category?: string;
   error?: string;
 };
-type AICounts = { pending: number; running: number; failed: number; success: number; stale: number };
+type AICounts = { pending: number; running: number; failed: number; success: number; stale: number; retry_exhausted?: number };
+
+export type RetryCandidate = { ticket_id: string; run_id: number };
 
 export type SystemStatus = {
+  retry_candidates?: Record<AIKind, RetryCandidate[]>;
   sync: {
     department_id: string;
     selected: number;
@@ -81,6 +90,8 @@ export type SystemStatus = {
     jev_running: boolean;
     bub_running: boolean;
     automatic: boolean;
+    started_at?: string;
+    recovery_pending?: Record<AIKind, number>;
     ai_scope: string;
     ai_scope_count?: number;
     sync_batch_size?: number;
@@ -106,7 +117,7 @@ export type AnalysisRun<Result> = {
   result?: Result;
 };
 
-type AnalysisView<Result> = { current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub" };
+type AnalysisView<Result> = { current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub"; waiting_reason?: string; retry_exhausted?: boolean; last_failed_at?: string; failure_before_start?: boolean };
 export type JevView = AnalysisView<{ model: string; answers: Record<string, { type: string; choice: string }> }>;
 
 type SummaryFact = { text: string; message_ids: string[] };
@@ -130,12 +141,12 @@ export async function getJSON<T>(path: string, signal: AbortSignal): Promise<T> 
   return response.json() as Promise<T>;
 }
 
-export async function postAction(path: string, token: string, signal: AbortSignal): Promise<void> {
-  const response = await fetch(path, { method: "POST", signal, headers: { "X-CSRF-Token": token, Accept: "application/json" } });
-  const body: { status?: string; error?: string } = response.headers.get("content-type")?.includes("application/json") ? await response.json() : {};
-  if (response.status === 202 && body.status === "accepted") return;
-  if (response.status === 409) throw new Error("操作已在运行，请等待完成。");
-  throw new Error(typeof body.error === "string" ? body.error : `操作未受理（HTTP ${response.status}），请刷新后重试。`);
+export async function postAction(path: string, token: string, signal: AbortSignal, body?: unknown): Promise<void> {
+  const response = await fetch(path, { method: "POST", signal, body: body === undefined ? undefined : JSON.stringify(body), headers: { "X-CSRF-Token": token, Accept: "application/json", "Content-Type": "application/json" } });
+  const result: { status?: string; error?: string } = response.headers.get("content-type")?.includes("application/json") ? await response.json() : {};
+  if (response.status === 202 && result.status === "accepted") return;
+  if (response.status === 409) throw new Error(result.error && result.error !== "operation already running" ? result.error : "操作已在运行，请等待完成。");
+  throw new Error(typeof result.error === "string" ? result.error : `操作未受理（HTTP ${response.status}），请刷新后重试。`);
 }
 
 export function aiLabel(value?: AIState): string {
@@ -143,6 +154,7 @@ export function aiLabel(value?: AIState): string {
   if (value.status === "disabled") return "已关闭";
   if (value.status === "waiting") return "等待总结";
   if (value.status === "running") return value.stale ? "更新中" : "处理中";
+  if (value.status === "failed" && value.retry_exhausted) return "需重试";
   if (value.status === "failed") return value.stale ? "更新失败" : "失败";
   if (value.stale) return "待更新";
   if (value.status === "pending") return value.automatic_eligible === false ? "等待同步" : "排队中";
@@ -174,11 +186,26 @@ export function dateTime(value?: string): string {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+export type FilterKey = "status" | "product" | "sync_status" | "emotion" | "priority";
+export type FilterChoice = { value: string; count: number };
+export type FilterOptions = Partial<Record<FilterKey, FilterChoice[]>>;
+export type FilterSelection = Record<FilterKey, string>;
+export type SearchFilters = { q: string; field: string; dateField: string; startDate: string; endDate: string };
+export const defaultSearch = (): SearchFilters => ({ q: "", field: "all", dateField: "first_incoming", startDate: "", endDate: "" });
+export const emptyFilters = (): FilterSelection => ({ status: "", product: "", sync_status: "", emotion: "", priority: "" });
+
+export function filterLabel(key: FilterKey, value: string): string {
+  if (key === "emotion" || key === "priority") return jevChoice(key, value);
+  if (key === "sync_status") return ({ synced: "已同步", pending: "待同步", failed: "同步失败，等待重试", incomplete: "会话不完整", merged: "已合并", deleted: "Zoho 已删除", stopped: "已停止同步" } as Record<string, string>)[value] || "未知";
+  return value === "__missing__" ? (key === "product" ? "未提供" : "未知") : value;
+}
+
 export function syncLabel(record: TicketRecord): string {
-  if (record.sync_stopped && record.sync_error === "ticket confirmed merged in Zoho") return "已合并";
-  if (record.sync_stopped) return record.sync_error === "ticket confirmed deleted in Zoho" ? "Zoho 已删除" : "已停止同步";
-  if (record.sync_error) return "同步失败，等待重试";
-  if (record.pending) return "待同步";
-  if (!record.complete) return "会话不完整";
-  return "已同步";
+  return filterLabel("sync_status", record.sync_status || "");
+}
+
+export function failureHint(value: { retry_exhausted?: boolean; last_failed_at?: string; failure_before_start?: boolean }): string {
+  const retry = value.retry_exhausted ? "自动重试已耗尽，需要人工重试。" : "";
+  const time = value.last_failed_at ? `${value.failure_before_start ? "本次启动前的历史失败" : "最近失败"}：${dateTime(value.last_failed_at)}。` : "";
+  return retry + time;
 }

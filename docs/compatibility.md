@@ -112,3 +112,7 @@ Intel macOS 验证发现 cryptography 50.0.2 没有对应 wheel；CI 对该锁�
 ## Issue #2：SOCKS 代理依赖
 
 已从锁定 httpx2 2.16.0 wheel 元信息核实 socks extra 要求 socksio==1.*；项目显式声明 httpx2[socks]==2.16.0，uv.lock 新增 socksio 1.0.0，其余版本不变。旧包仅导入 SDK，无法发现代理 transport 初始化的缺依赖错误；新包和 Go 离线预检构造实际 transport，支持大小写 ALL_PROXY 与 HTTP(S)_PROXY 共存。已知环境故障在模型尝试前拒绝，运行状态/日志仅含固定错误码及操作提示，代理认证信息不输出。无需数据库迁移或更改总结 Schema。旧失败历史保留，已耗尽自动重试的工单需手动重新总结。
+
+## 工单组合筛选（2026-11-05）
+
+用户确认顶部单搜索框结合字段与日期范围；五列表头使用 shadcn Combobox，列名保留箭头且不显示“全部”。数据契约见 internal/app/AGENTS.md。无需数据库迁移或重新采集，首份来信从已有完整会话派生，身份仍来自保留的 Zoho 详情。旧前端的 filters 字符串数组改为同名字段键下的 [{value,count}]；Go 和前端须一起构建部署。未增加 AI 模型字段或触发重评。固定 CLI 生成 Popover/Command 组合，新增 Bits UI 2.20.4 与 peer @internationalized/date 3.12.4 精确依赖；当前发布年龄策略解析了该稳定版本，不为本次修改升级既有依赖。

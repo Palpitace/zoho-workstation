@@ -1,10 +1,10 @@
 <!-- input: Bub 结果、当前消息、操作反馈和重新总结回调。 -->
-<!-- output: 整单三段综合总结、未知作者原文标记、引用定位及返回总结入口。 -->
+<!-- output: 重试耗尽/失败时间提示； 整单三段综合总结、未知作者原文标记、引用定位及返回总结入口。 -->
 <!-- pos: 工单详情中的 Bub 总结展示与证据定位。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { type BubView, type Message, type ActionFeedback } from "./api";
+  import { failureHint, type BubView, type Message, type ActionFeedback } from "./api";
 
   let { view, messages, loading, error, control, onRerun }: { view: BubView | null; messages: Message[]; loading: boolean; error: string; control: ActionFeedback; onRerun: () => void } = $props();
   const savedSummary = $derived(view?.success?.result?.summary);
@@ -62,6 +62,7 @@
   {#if control.notice}<p role="status" class="text-sm text-muted-foreground">{control.notice}</p>{/if}
   {#if loading}<p role="status" class="text-sm text-muted-foreground">正在读取总结…</p>{/if}
   {#if error}<p role="alert" class="text-sm text-destructive">总结暂不可读：{error}</p>{/if}
+  {#if failed && view && failureHint(view)}<p class="text-sm text-muted-foreground">{failureHint(view)}</p>{/if}
   {#if view?.current?.error}<p role="alert" class="text-sm break-words text-destructive">{view.current.error}</p>{/if}
   {#if view?.stale}<p class="text-sm text-muted-foreground">以下是旧输入或旧配置对应的成功总结，不代表当前会话。</p>
   {:else if view?.success && failed}<p class="text-sm text-muted-foreground">保留上次成功总结，最近失败未覆盖已有结果。</p>{/if}

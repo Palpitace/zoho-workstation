@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成 Jev HTTP 服务和仅接收 stdin 的临时 Python 入口。
-// output: Bub→Jev 顺序、环境失败零请求及修复恢复、持续处理和缓存复用的证据。
+// output: Bub→Jev 顺序、耗尽重试的显式恢复/历史保留/单次限额、环境预检与缓存复用证据。
 // pos: 总结到评估流水线集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -42,8 +42,9 @@ if sys.argv[1:] == ["--check"]:
     print(json.dumps({"ok": False, "error": "proxy_dependency_missing"} if failed else {"ok": True}))
     sys.exit(1 if failed else 0)
 request = json.load(sys.stdin)
-with open("captured-" + request["input"]["ticket_id"] + ".json", "w") as f:
+with open("captured.tmp", "w") as f:
     json.dump(request, f)
+os.replace("captured.tmp", "captured-" + request["input"]["ticket_id"] + ".json")
 while not os.path.exists("release"):
     time.sleep(0.01)
 if os.path.exists("fail"):
@@ -245,6 +246,117 @@ else:
 			} else {
 				if s := read("2"); s["jev"].Status != "waiting" || s["bub"].Status != "failed" || calls.Load() != 0 {
 					t.Fatalf("failed Bub must not permit Jev: %+v", s)
+				}
+			}
+			if !success {
+				// Old environment failures survive deployment; recovery must be explicit.
+				service.Close()
+				service, err = app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = service.Start(ctx); err != nil {
+					t.Fatal(err)
+				}
+				defer service.Close()
+				state := read("2")
+				if !state["bub"].RetryExhausted || state["bub"].LastFailedAt == "" || !state["bub"].FailureBeforeStart || !strings.Contains(state["jev"].WaitingReason, "耗尽") {
+					t.Fatalf("historical exhausted state or Jev reason missing: %+v", state)
+				}
+				request := func(method, path, body, token string) *httptest.ResponseRecorder {
+					r := httptest.NewRequest(method, path, strings.NewReader(body))
+					r.Host = "localhost:8080"
+					r.Header.Set("X-CSRF-Token", token)
+					r.Header.Set("Content-Type", "application/json")
+					w := httptest.NewRecorder()
+					service.Handler().ServeHTTP(w, r)
+					return w
+				}
+				preview := func() (string, string) {
+					w := request("GET", "/api/status", "", "")
+					var status struct {
+						Token      string                       `json:"csrf_token"`
+						Candidates map[string][]json.RawMessage `json:"retry_candidates"`
+					}
+					if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &status) != nil || len(status.Candidates["bub"]) != 2 {
+						t.Fatal("exhausted historical failures have no controlled recovery preview")
+					}
+					body, _ := json.Marshal(map[string]any{"candidates": status.Candidates["bub"]})
+					return string(body), status.Token
+				}
+				body, token := preview()
+				if err := os.WriteFile("environment-failure", nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if w := request("POST", "/api/analysis/bub/retry", body, token); w.Code != 503 {
+					t.Fatalf("broken environment accepted recovery: %d", w.Code)
+				}
+				if budget, _ := db.AnalysisBudget(ctx, app.DevelopmentRound); budget.Total != 4 {
+					t.Fatal("preflight consumed historical retry")
+				}
+				if err := os.Remove("environment-failure"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove("release"); err != nil {
+					t.Fatal(err)
+				}
+				if w := request("POST", "/api/analysis/bub/retry", body, ""); w.Code != 403 {
+					t.Fatal("unprotected recovery")
+				}
+				if w := request("POST", "/api/analysis/bub/retry", body, token); w.Code != 202 {
+					t.Fatalf("recovery rejected: %d %s", w.Code, w.Body.String())
+				}
+				if w := request("POST", "/api/analysis/bub/retry", body, token); w.Code != 409 {
+					t.Fatalf("duplicate recovery accepted: %d", w.Code)
+				}
+				if err := os.WriteFile("release", nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				waitCount := func(total int, result string) {
+					for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); {
+						budget, _ := db.AnalysisBudget(ctx, app.DevelopmentRound)
+						if budget.Total == total && read("1")["bub"].Status == result && read("2")["bub"].Status == result {
+							return
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
+					t.Fatalf("recovery did not reach count %d / state %s", total, result)
+				}
+				waitCount(6, "failed")
+				if w := request("POST", "/api/analysis/bub/retry", body, token); w.Code != 409 {
+					t.Fatal("stale confirmation replayed")
+				}
+				// One confirmed pass does not reset the automatic failure limit.
+				time.Sleep(100 * time.Millisecond)
+				if budget, _ := db.AnalysisBudget(ctx, app.DevelopmentRound); budget.Total != 6 {
+					t.Fatal("recovery retried without another confirmation")
+				}
+				if err := os.Remove("fail"); err != nil {
+					t.Fatal(err)
+				}
+				body, token = preview()
+				if w := request("POST", "/api/analysis/bub/retry", body, token); w.Code != 202 {
+					t.Fatalf("repaired recovery rejected: %d", w.Code)
+				}
+				waitCount(10, "success")
+				if calls.Load() != 2 {
+					t.Fatal("Jev did not resume after recovered summaries")
+				}
+				if read("1")["bub"].RetryExhausted {
+					t.Fatal("success still shown as exhausted")
+				}
+				service.Close()
+				service, err = app.New(cfg, db, zoho.New(cfg.Zoho, external.Client()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = service.Start(ctx); err != nil {
+					t.Fatal(err)
+				}
+				defer service.Close()
+				time.Sleep(100 * time.Millisecond)
+				if budget, _ := db.AnalysisBudget(ctx, app.DevelopmentRound); budget.Total != 10 {
+					t.Fatal("restart reset history or repeated recovered successes")
 				}
 			}
 			for _, id := range []string{"3", "4"} {

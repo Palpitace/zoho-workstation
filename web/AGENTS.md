@@ -64,3 +64,5 @@ Bub 增量的设计简化检查：共用 AnalysisRun/AnalysisView 元数据类�
 操作增量已通过相同合成浏览器链路：列表建议/未知值和自动分析资格、手动同步/独立模型 POST 的 CSRF 头、202 受理、409 冲突及 503 安全错误、单能力运行禁用、预算耗尽不阻塞同步、invalid 本地输入错误保留成功结果。连续空闲周期只新增 status GET，没有列表请求或 POST；桌面和 390px 页面无横向溢出。另用关闭 env 加载的隔离 Vite 代理与合成 HTTP 服务验证目标 Host 重写、浏览器 Origin/CSRF 头保留。最终类型检查 0 错误 0 警告、build 和文档检查通过，未调用真实服务或模型。
 
 Bub 增量已通过同一合成浏览器主链路：建议/客户确认执行/执行未知、客户报告结果/结果未知、模型建议/待验证假设、失败保留成功及过期标记、无结果待总结、失败无成功结果、旧消息引用缺失，以及引用点击后滚动并聚焦且 hash 路由不变。补充验证筛选列表不含目标票时，详情仍显示自身同步错误。桌面与窄屏无溢出，最终 `pnpm check` 为 0 错误 0 警告，`pnpm build` 与文档结构检查通过。未调用真实模型或读取真实工单。
+
+2026-11-05 在固定 shadcn-svelte 1.8.0 CLI/Vega 基础上增加 Combobox 所需 command、popover、input-group 子集，保留既有 button/input。CLI 按当前 release-age 策略解析的稳定兼容 Bits UI 2.20.4 与 peer @internationalized/date 3.12.4 均改为精确锁定；未升级既有依赖。官方 Combobox 是 Popover+Command 组合。删除本期未使用的 Dialog、Textarea、Command 其他扩展与导出，相关类型/构建重新验证。

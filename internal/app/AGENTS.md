@@ -10,7 +10,9 @@
 | analysis.go | 分析输入与开发入口 | 固定数据集、Bub 总结到 Jev 输入、实际输入版本及有限分析命令 |
 | analysis_test.go | 恢复测试 | 互斥分析避免误恢复活动请求 |
 | app.go | 生命周期 | 同步批次/退避、全部有效工单分析及完成唤醒 |
+| recovery.go | 显式恢复 | 校验用户确认的运行 ID，向原调度器提供一次恢复机会 |
 | http.go | 同源 API | 工单号/链接、组合筛选、分类/独立分析状态及受保护操作 |
+| list.go | 列表查询 | 字段/日期/表头筛选、来信时间与稳定计数 |
 | list_test.go | 列表回归 | 旧快照真实身份、筛选选项稳定、分类和独立过期状态 |
 | sync_test.go | 同步调度回归 | 首轮接续、失败/429 等待及关闭取消 |
 | app_test.go | 小型集成验证 | 自动失败重试、查询不阻塞、操作防护及重启 |
@@ -49,4 +51,18 @@ GET /api/tickets 支持 q/status/product 组合，product=__missing__ 选择缺�
 
 Python 环境预检和实际执行共用 analysis.PythonExecutable，支持便携包和 Windows venv；后台模型完成/失败写结构化日志（能力、工单 ID、安全错误），不记录输入或输出正文。CLI 互斥回归改用 Store.Lock 公共入口，避免测试依赖 Unix syscall。
 
-Issue #2：每轮自动分析对启用的 Bub 做一次 CheckPython 离线预检，失败写运行错误并跳过该能力，不进入 StartAnalysis、不增加每票失败次数；下轮重检，可恢复。手动 Bub 和研发 CLI 同样先检查，HTTP 返回 503 及安全原因码。同步和已有结果查看不受影响，不增加持久状态或重试表。历史 summary_failed 不清空，已用尽两次自动尝试的旧输入由用户点击重新总结。公共 App/Store 边界验证环境失败零请求、手动重复失败不计次、环境恢复可继续。
+Issue #2：每轮自动分析对启用的 Bub 做一次 CheckPython 离线预检，失败写运行错误并跳过该能力，不进入 StartAnalysis、不增加每票失败次数；下轮重检，可恢复。手动 Bub 和研发 CLI 同样先检查，HTTP 返回 503 及安全原因码。同步和已有结果查看不受影响，不增加持久状态或重试表。历史 summary_failed 不清空，已用尽两次自动尝试的旧输入由用户点击重新总结，或使用下述显式批量恢复。公共 App/Store 边界验证环境失败零请求、手动重复失败不计次、环境恢复可继续。
+
+## 组合搜索与五列表头筛选
+
+GET /api/tickets 的 field 支持 all/subject/ticket_number/id/product；q 默认跨字段匹配，标题/产品忽略大小写包含匹配，号码/ID 去除前导 # 后精确匹配。日期字段 date_field 为 first_incoming/created/updated；from 包含起点、until 不包含终点，均为 RFC3339，非法字段/日期/反向范围返回 400。浏览器把当地日期的次日零点作为 until，可正确覆盖结束当天和夏令时。
+first_incoming_time 仅从完整快照最早的公开入站 thread 计算，排除 agent 以及 DRAFT/FAILED/PENDING，不修改原作者角色；无法确认时为空，不用创建时间替代。展示字段不改变模型输入 Hash。
+status/product/emotion/priority/sync_status 五列条件与搜索/日期取交集；未知 AI 字段归 unknown，缺产品/状态为 __missing__。sync_status 与展示共用同一派生，区分 synced/pending/failed/incomplete/merged/deleted/stopped。filters 返回同名数组 [{value,count}]，计数基于历史开关限定的本地集合，不随当前查询缩窄，列表上限仍为原固定样本；不扩采样，不改 Store.List 的同步消费者。
+show_history=false 时服务端排除 sync_stopped；前端始终明确传值，无参数的既有接口调用仍包含历史。列表组件不再重复过滤，清除条件恢复隐藏历史。
+
+## Issue #3：历史失败与受控恢复
+
+AnalysisView / AIStatus 返回 retry_exhausted、last_failed_at；仅当前签名最新运行失败且累计 failed≥2 才标耗尽，成功或新输入不继承该标志。HTTP 用 runtime.started_at 区分 failure_before_start；历史失败不冒充本次运行失败。Jev waiting_reason 指明 Bub 失败/耗尽/关闭，仍不发送过期总结。
+GET /api/status 返回 retry_candidates（按能力、有效工单的 ticket_id/run_id）及耗尽数量，runtime.recovery_pending 表示未开始的已确认项。POST /api/analysis/:kind/retry 必须同源/CSRF，JSON candidates 限 1–50 项，全部校验当前有效快照/输入版本/失败运行 ID 后原子接受；失效确认返回 409，不扩大候选集合。Bub 先离线预检，失败返回 503、不增加次数。
+确认只进入 App 内存映射，由既有 scheduleAnalysis/startAnalysis 和 analysisWake 消费；每能力仍一个请求，不另建队列/表/调度器。实际开始前再次验证运行 ID/输入，改变、停止或无效的候选撤销授权，正常新输入分析仍遵守原规则。每个确认项只 force 一次，再失败仍受历史两次失败限制，不自动循环；复用当前成功、保留全部尝试历史。重启丢弃未开始的确认项，用户重新确认；已有 running 仍按原中断恢复规则处理。单票手动重跑保持可用。
+reference_test 通过公共 HTTP/App/Store 与合成 Python 进程验证：历史两次失败→重启显示耗尽→本地环境失败零计数→确认补一次、重复/旧确认拒绝→再次失败不循环→修复后重确认成功并接续 Jev→重启不重复成功。

@@ -18,3 +18,7 @@ compatibility.md 记录业务全量已同步分析、列表号/分类/筛选及�
 compatibility.md 记录表头筛选与 Bub v6→Jev v2 升级、等待语义及无数据库迁移的更新方式。
 
 Issue #2 的锁定 SOCKS 依赖与预检依据见 compatibility.md，下载版环境错误处理和旧失败重试步骤见 downloads.md。
+
+compatibility.md 记录组合筛选 API/前端协同部署及 Combobox 依赖。
+
+downloads.md 补充 Issue #3 环境修复后的人工确认恢复、历史失败时间、一次尝试与重启重新确认规则。

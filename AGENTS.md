@@ -14,7 +14,7 @@
 
 - 后端 Go、Gin、net/http、encoding/json、log/slog、database/sql、modernc.org/sqlite、原生 SQL；仅 Go 访问数据库。
 - 前端 Svelte 5、TypeScript、Vite、shadcn-svelte、兼容的 Tailwind，按需 Lucide；生产静态资源由 Go 提供。
-- 列表按情绪、优先级、问题分类分列显示 Jev，支持表头状态/产品下拉筛选及真实工单号跳转。详情采用紧凑工单信息 → Jev → Bub → 默认折叠的倒序沟通记录；模型结果来源在界面隐藏但继续保存。Bub v6 按整张工单综合归纳，只输出有依据的设备信息、客户反馈、客服回复/排查，客户反馈/客服处理各至多一份摘要、空段不展示；事实引用可展开并定位消息，旧格式结果保留并提示重新总结。未知作者的公开入站 SUCCESS 线程仅允许逐字摘录反馈并标注作者未确认，不据方向推断作者身份。
+- 列表按情绪、优先级、问题分类分列显示 Jev，支持五列表头 Combobox、顶部字段/日期组合搜索和清除筛选，以及真实工单号跳转。详情采用紧凑工单信息 → Jev → Bub → 默认折叠的倒序沟通记录；模型结果来源在界面隐藏但继续保存。Bub v6 按整张工单综合归纳，只输出有依据的设备信息、客户反馈、客服回复/排查，客户反馈/客服处理各至多一份摘要、空段不展示；事实引用可展开并定位消息，旧格式结果保留并提示重新总结。未知作者的公开入站 SUCCESS 线程仅允许逐字摘录反馈并标注作者未确认，不据方向推断作者身份。
 - Bub 使用核实过的稳定 SDK，通过固定 Python 入口及 stdin/stdout JSON 与 Go 交互；stderr 日志、超时、有限并发，不拼接 Shell。
 - 运行需要 Go 服务及随附 Python 环境；Node 仅参与前端开发和构建。
 - Bub v6 先读取完整脱敏会话并总结；Jev v2 只基于当前版本的成功 Bub 总结评估。缺少当前总结时 Jev 等待，不回退原始会话、不使用过期总结。总结及评估均是模型输出，缺失事实保持未知；失败不影响同步和查看，旧输入结果不能覆盖新输入结果。
@@ -93,3 +93,5 @@ Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`�
 用户授权增加 Windows x64、macOS Intel/Apple Silicon 自动构建并提交远程；这不包含生产部署。GitHub Actions 构建包含 Go、前端及独立 Python/Bub 环境的包，下载者无需安装开发工具链；操作见 [docs/downloads.md](docs/downloads.md)。源代码仍支持原 .venv 开发方式。
 `python scripts/package.py` 在前端构建后原生打包，`python scripts/smoke_package.py <归档>` 异地解压离线验证。`workstation check` 检查配置、资源、数据库锁及启用的 Python SDK/代理 transport，不调用外部服务。Bub 的 SOCKS 依赖随锁文件和下载包提供；自动/手动/CLI 分析在请求计数前离线预检，环境错误不产生逐票重试风暴，详情见 python/AGENTS.md。
 日志固定在 logs/workstation.log，slog 同时输出终端；lumberjack v2.2.1 实现 10 MiB/3 备份/7 天轮转，启动错误也留存。密钥、正文和 Python 原始 stderr 不写日志。Windows 使用 LockFileEx，Unix 使用 Flock；进程退出释放操作锁。
+
+历史失败恢复：自动失败上限不因升级/重启重置。运行状态可确认固定失败版本，每票补执行一次；仍使用原调度器和持久历史，未开始的确认不跨重启保留。接口与约束见 internal/app/AGENTS.md，用户操作见 docs/downloads.md。

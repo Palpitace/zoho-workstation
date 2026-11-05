@@ -1,5 +1,5 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 按输入版本的分析记录、本地校验失败、成功结果保留和跨重启调用计数（不限制累计次数）。
+// output: 按输入版本的分析记录、重试耗尽/最近失败信息、成功结果保留和持久调用计数。
 // pos: SQLite AI 结果与调用计数边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -29,9 +29,11 @@ type AnalysisRun struct {
 	Error         string          `json:"error,omitempty"`
 }
 type AnalysisView struct {
-	Current *AnalysisRun `json:"current"`
-	Success *AnalysisRun `json:"success"`
-	Stale   bool         `json:"stale"`
+	Current        *AnalysisRun `json:"current"`
+	Success        *AnalysisRun `json:"success"`
+	Stale          bool         `json:"stale"`
+	RetryExhausted bool         `json:"retry_exhausted"`
+	LastFailedAt   string       `json:"last_failed_at,omitempty"`
 }
 type Budget struct {
 	Total int `json:"total"`
@@ -123,6 +125,7 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 	}
 	defer rows.Close()
 	var view AnalysisView
+	failures := 0
 	for rows.Next() {
 		r := AnalysisRun{AnalysisRequest: AnalysisRequest{TicketID: req.TicketID, Kind: req.Kind}}
 		var body []byte
@@ -131,6 +134,12 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 		}
 		r.Result = json.RawMessage(body)
 		matches := r.InputHash == req.InputHash && r.SchemaVersion == req.SchemaVersion && r.RequestedModel == req.RequestedModel
+		if matches && r.Status == "failed" {
+			failures++
+			if view.LastFailedAt == "" {
+				view.LastFailedAt = r.CompletedAt
+			}
+		}
 		if matches && view.Current == nil {
 			copy := r
 			view.Current = &copy
@@ -141,5 +150,6 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 			view.Stale = !matches
 		}
 	}
+	view.RetryExhausted = failures >= 2 && view.Current != nil && view.Current.Status == "failed"
 	return view, rows.Err()
 }
