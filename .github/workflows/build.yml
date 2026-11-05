@@ -44,6 +44,14 @@ jobs:
         with:
           version: '0.13.7'
           python-version: '3.12.14'
+      - name: Configure Intel macOS native dependency build
+        if: matrix.name == 'macos-x64'
+        run: |
+          brew list --versions openssl@3 >/dev/null || brew install openssl@3
+          test -f "$(brew --prefix openssl@3)/lib/libssl.a"
+          rustc --version
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
       - name: Install locked dependencies
         run: |
           pnpm --dir web install --frozen-lockfile

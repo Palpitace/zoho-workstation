@@ -23,6 +23,16 @@ with tempfile.TemporaryDirectory(prefix="workstation portable space ") as tempor
     env = {**os.environ, "PYTHONPATH": str(root / "python/packages"), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
     # No SDK request: actual imports and JSON contract validation exercise native wheels.
     subprocess.run([str(python), "-c", "import sys; sys.path.insert(0, 'python'); import main; main.Snapshot.model_validate({'conversation_hash':'synthetic','messages':[]}); print('bundled SDK import: PASS')"], cwd=root, env=env, check=True)
+    if sys.platform == "darwin":
+        for library in (root / "python/packages").rglob("*"):
+            if library.suffix not in (".so", ".dylib"):
+                continue
+            linked = subprocess.check_output(["otool", "-L", str(library)], text=True)
+            for line in linked.splitlines()[1:]:
+                dependency = line.strip().split(" (", 1)[0]
+                if dependency.startswith("/") and not dependency.startswith(("/usr/lib/", "/System/Library/")):
+                    raise AssertionError(f"SDK depends on build-host library: {dependency}")
+        print("SDK native libraries are independent of Homebrew/build-host paths: PASS")
     binary = root / ("workstation.exe" if os.name == "nt" else "workstation")
     invalid = subprocess.run([str(binary), "check"], cwd=root, capture_output=True)
     assert invalid.returncode != 0

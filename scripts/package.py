@@ -38,7 +38,16 @@ def main():
         python = stage / "runtime" / "python" / ("python.exe" if system == "windows" else "bin/python3")
         requirements = Path(temporary) / "requirements.txt"
         run("uv", "export", "--project", "python", "--locked", "--no-dev", "--no-emit-project", "--format", "requirements-txt", "--output-file", str(requirements), stdout=subprocess.DEVNULL)
-        run("uv", "pip", "install", "--python", str(python), "--target", str(stage / "python" / "packages"), "--require-hashes", "--link-mode", "copy", "--only-binary", ":all:", "-r", str(requirements))
+        wheel_options = ["--only-binary", ":all:"]
+        build_env = dict(os.environ)
+        if system == "macos" and arch == "x64":
+            # The locked cryptography release has no Intel macOS wheel. Build
+            # its hash-verified source with static OpenSSL, never a cached
+            # extension that could depend on the CI host's Homebrew libraries.
+            wheel_options = ["--no-binary", "cryptography", "--no-cache"]
+            build_env["OPENSSL_STATIC"] = "1"
+            build_env["OPENSSL_DIR"] = run("brew", "--prefix", "openssl@3", capture_output=True).stdout.strip()
+        run("uv", "pip", "install", "--python", str(python), "--target", str(stage / "python" / "packages"), "--require-hashes", "--link-mode", "copy", *wheel_options, "-r", str(requirements), env=build_env)
         for file in ("main.py", "pyproject.toml", "uv.lock"):
             shutil.copy2(ROOT / "python" / file, stage / "python" / file)
         shutil.copytree(ROOT / "web" / "dist", stage / "web" / "dist")
