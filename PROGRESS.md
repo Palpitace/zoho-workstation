@@ -13,8 +13,9 @@
 - 消融：未增加安装服务、Updater 或后台平台；打包直接复用锁文件/工具，删除测试中的 Unix 私有锁调用，复用 Store.Lock；不自行实现日志轮转。平台能力仅增加文件锁实现和解释器定位，未引入新数据库或通知模块。
 - 文档同步：根及受影响目录 AGENTS、GOAL、下载与兼容说明已更新。真实 Zoho/模型请求 0，未改用户凭据/数据或重启原服务。
 - 首次 CI：4372ae2 已推送，Windows 运行测试/前端/Python 均通过，但文档检查对 CRLF build tag 空行误报；新增命令边界回归先复现失败，再统一换行修复。Apple Silicon 包已通过原生完整流程；修复提交将再次验证三平台。
-- 第二轮 CI：8a161f6 的 Windows 与 Apple Silicon 全部成功，Windows 远程下载已读回并核对 SHA256、BUILD.json 源提交及内容白名单。Intel Mac 缺 cryptography 50.0.2 wheel，已将该平台改为固定源码静态 OpenSSL 构建，并增加 SDK 动态库依赖检查；待新提交原生验证。
-- 验证阶段：本地完整归档与异地解压检查通过（真实 SDK 导入、Go check、SQLite/锁、安全日志）；Windows/macOS 的实际原生结果以提交对应 GitHub Actions 运行记录为准。完成本地检查后推送并核对首次 CI 与下载产物。
+- 第二轮 CI：8a161f6 的 Windows 与 Apple Silicon 全部成功，Windows 远程下载已读回并核对 SHA256、BUILD.json 源提交及内容白名单。Intel Mac 缺 cryptography 50.0.2 wheel，已将该平台改为固定源码静态 OpenSSL 构建，并增加 SDK 动态库依赖检查；后续原生验证已通过。
+- 最终验证：代码提交 9296d0505ec095f86544aa8fc9bcf54db05ce22e 的 [GitHub Actions 42015704905](https://github.com/Palpitace/zoho-workstation/actions/runs/42015704905) 三平台测试、构建、含空格路径异地解压检查及产物上传均通过；包括真实 SDK 离线导入、Go check、SQLite/锁、安全日志，Mac 动态库无构建机绝对依赖。最终 Windows 包已下载读回，SHA256、BUILD.json 源提交/干净状态和打包白名单全部核对通过。本轮真实 Zoho/模型请求仍为 0。
+- 交付：Windows x64、macOS Intel 与 Apple Silicon 包均可从上述 Actions 的 Artifacts 下载；操作见 docs/downloads.md。实现已推送 main，最终验证记录单独提交且跳过重复 CI；无需为纯进度更新重建相同应用代码。
 
 ## 表头筛选与 Bub→Jev（2026-11-05）
 
