@@ -6,6 +6,7 @@
 
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
+| recent_test.go | 范围回归 | 启动隔离、自动资格与四类模型输入拒绝 |
 | AGENTS.md | 目录约定 | 编排边界与命令契约 |
 | knowledge.go | 知识编排 | 当前案例签名、有效来源检索、独立建议输入与自动案例保存 |
 | knowledge_http.go | 知识 API | 本地文档导入、草稿修订、确认发布/停用和建议状态 |
@@ -96,3 +97,5 @@ GET `/api/tickets/:id/knowledge` 独立返回 case/advice 状态和来源快照�
 `/api/status.bub_tasks` 按任务统计 pending/running/retry_waiting/manual/waiting，覆盖总结、案例、建议；active 返回工单号、类型、开始时间及运行秒数，tasks 返回未完成项、尝试次数、上次失败与重试时间。状态由同一次持久历史读取派生，旧输入仍执行时不丢失活动记录，不创建第二套队列。列表、详情与知识 API 共用 task_state；全局并发占用只说明其他任务正在执行，不声称当前工单运行。失败日志保留安全类别、HTTP状态、请求ID与run_id，不记录异常正文。
 
 | tasks.go | 状态派生 | 统一任务状态、活动任务及分类积压，无新队列 |
+
+滚动测试版在 New 时启用存储范围，首次选取前不调度旧工单；列表/统计/自动Bub、Jev、案例和建议仅使用当前50张。手动分析和案例保存再次读取 OutsideScope，防止旧列表或已退出范围的任务派生新操作。范围切换前已发出的请求允许结束，历史结果保留。状态API返回 sync_recent_limit。

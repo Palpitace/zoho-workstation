@@ -1,5 +1,5 @@
 // input: SQLite 路径、固定部门和原始/规范化工单快照。
-// output: 工单、同步进度、可追溯知识版本及同库操作锁。
+// output: 可恢复滚动范围、工单、同步进度、可追溯知识版本及同库操作锁。
 // pos: Go 独占数据库边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -21,6 +22,7 @@ import (
 var ErrBusy = errors.New("operation is already running for this database")
 
 type Store struct {
+	recentOnly atomic.Bool
 	db         *sql.DB
 	department string
 	path       string
@@ -92,7 +94,8 @@ func Open(path, department string) (*Store, error) {
 		status TEXT NOT NULL, returned_model TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL,
 		completed_at TEXT NOT NULL DEFAULT '', result_json TEXT, error TEXT NOT NULL DEFAULT ''
 	);
-	CREATE INDEX IF NOT EXISTS ai_runs_ticket ON ai_runs(ticket_id,kind,id);`)
+	CREATE TABLE IF NOT EXISTS recent_tickets (id TEXT PRIMARY KEY REFERENCES tickets(id));
+ CREATE INDEX IF NOT EXISTS ai_runs_ticket ON ai_runs(ticket_id,kind,id);`)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -202,7 +205,7 @@ func (s *Store) Reserve(ctx context.Context, ids []string) error {
 }
 
 func (s *Store) IDs(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id FROM tickets ORDER BY selected_at,id")
+	rows, err := s.db.QueryContext(ctx, "SELECT id FROM tickets WHERE (?=0 OR id IN (SELECT id FROM recent_tickets)) ORDER BY selected_at,id", s.recentOnly.Load())
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +252,7 @@ func (s *Store) Failure(ctx context.Context, id, message string) error {
 func (s *Store) Get(ctx context.Context, id string) (Record, error) {
 	record := Record{Snapshot: ticket.Snapshot{ID: id}}
 	var body, raw []byte
-	err := s.db.QueryRowContext(ctx, "SELECT snapshot_json,raw_json,sync_error,checked_at,sync_stopped FROM tickets WHERE id=?", id).Scan(&body, &raw, &record.SyncError, &record.CheckedAt, &record.SyncStopped)
+	err := s.db.QueryRowContext(ctx, "SELECT snapshot_json,raw_json,sync_error,checked_at,sync_stopped,(? AND id NOT IN (SELECT id FROM recent_tickets)) FROM tickets WHERE id=?", s.recentOnly.Load(), id).Scan(&body, &raw, &record.SyncError, &record.CheckedAt, &record.SyncStopped, &record.OutsideScope)
 	if err != nil {
 		return record, err
 	}
@@ -266,15 +269,16 @@ func (s *Store) Get(ctx context.Context, id string) (Record, error) {
 
 type Record struct {
 	ticket.Snapshot
-	Raw         ticket.RawSnapshot `json:"-"`
-	SyncStopped bool               `json:"sync_stopped"`
-	SyncError   string             `json:"sync_error,omitempty"`
-	Pending     bool               `json:"pending"`
-	CheckedAt   string             `json:"checked_at,omitempty"`
+	Raw          ticket.RawSnapshot `json:"-"`
+	OutsideScope bool               `json:"outside_scope"`
+	SyncStopped  bool               `json:"sync_stopped"`
+	SyncError    string             `json:"sync_error,omitempty"`
+	Pending      bool               `json:"pending"`
+	CheckedAt    string             `json:"checked_at,omitempty"`
 }
 
 func (s *Store) List(ctx context.Context, query, status string) ([]Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at,sync_stopped FROM tickets WHERE (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id`, query, query, status, status)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at,sync_stopped FROM tickets WHERE (?=0 OR id IN (SELECT id FROM recent_tickets)) AND (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id`, s.recentOnly.Load(), query, query, status, status)
 	if err != nil {
 		return nil, err
 	}
@@ -299,12 +303,12 @@ func (s *Store) List(ctx context.Context, query, status string) ([]Record, error
 
 func (s *Store) State(ctx context.Context) (State, error) {
 	var v State
-	err := s.db.QueryRowContext(ctx, `SELECT department,watermark,batch_upper,last_attempt,last_error,discovery_cycle,discovery_start,discovery_offset,discovery_done,
-		(SELECT count(*) FROM tickets),
-		(SELECT count(*) FROM tickets WHERE snapshot_json IS NOT NULL),
-		(SELECT count(*) FROM tickets WHERE sync_error!='' AND sync_stopped=0),
-		(SELECT count(*) FROM tickets WHERE json_extract(snapshot_json,'$.complete')=1 AND sync_stopped=0),
-		(SELECT count(*) FROM tickets WHERE sync_stopped=1) FROM sync_state WHERE id=1`).Scan(&v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.DiscoveryCycle, &v.DiscoveryStart, &v.DiscoveryOffset, &v.DiscoveryDone, &v.Selected, &v.Ready, &v.Failed, &v.Complete, &v.Stopped)
+	err := s.db.QueryRowContext(ctx, `WITH scoped AS (SELECT * FROM tickets WHERE (?=0 OR id IN (SELECT id FROM recent_tickets))) SELECT department,watermark,batch_upper,last_attempt,last_error,discovery_cycle,discovery_start,discovery_offset,discovery_done,
+		(SELECT count(*) FROM scoped),
+		(SELECT count(*) FROM scoped WHERE snapshot_json IS NOT NULL),
+		(SELECT count(*) FROM scoped WHERE sync_error!='' AND sync_stopped=0),
+		(SELECT count(*) FROM scoped WHERE json_extract(snapshot_json,'$.complete')=1 AND sync_stopped=0),
+		(SELECT count(*) FROM scoped WHERE sync_stopped=1) FROM sync_state WHERE id=1`, s.recentOnly.Load()).Scan(&v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.DiscoveryCycle, &v.DiscoveryStart, &v.DiscoveryOffset, &v.DiscoveryDone, &v.Selected, &v.Ready, &v.Failed, &v.Complete, &v.Stopped)
 	return v, err
 }
 

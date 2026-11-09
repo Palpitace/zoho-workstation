@@ -1,5 +1,5 @@
 // input: 合成 .env 的监听地址及同步批次/并发边界。
-// output: 创建时间默认边界及 监听配置及批次/并发默认值和非法范围拒绝的证据。
+// output: 最新50张默认值与非法范围拒绝；创建时间默认边界及 监听配置及批次/并发默认值和非法范围拒绝的证据。
 // pos: 启动配置边界验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package config_test
 
@@ -17,6 +17,7 @@ func TestListenAndSyncConfiguration(t *testing.T) {
 		name, setting, want string
 		invalid             bool
 	}{
+		{"invalid recent limit", "SYNC_RECENT_LIMIT=51\n", "", true},
 		{"invalid start", "SYNC_START_TIME=yesterday\n", "", true},
 		{"local default", "", "127.0.0.1", false},
 		{"zero batch", "SYNC_BATCH_SIZE=0\n", "", true},
@@ -38,7 +39,7 @@ func TestListenAndSyncConfiguration(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || cfg.ListenHost != tc.want || cfg.SyncBatchSize != 9 || cfg.SyncConcurrency != 3 || cfg.SyncStartTime.Format(time.RFC3339) != config.DefaultSyncStartTime {
+			if err != nil || cfg.ListenHost != tc.want || cfg.RecentLimit != 50 || cfg.SyncBatchSize != 9 || cfg.SyncConcurrency != 3 || cfg.SyncStartTime.Format(time.RFC3339) != config.DefaultSyncStartTime {
 				t.Fatalf("listen configuration: %q %v", cfg.ListenHost, err)
 			}
 		})

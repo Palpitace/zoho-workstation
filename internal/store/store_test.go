@@ -1,5 +1,5 @@
 // input: 临时 SQLite 文件和合成工单。
-// output: 允许追加新工单； 样本/快照/额度保留、幂等更新及非破坏性迁移的验证。
+// output: 滚动范围原子更新、重启与历史保留；允许追加新工单； 样本/快照/额度保留、幂等更新及非破坏性迁移的验证。
 // pos: 数据持久化行为测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store_test
 
@@ -104,5 +104,77 @@ func TestStopFlagMigrationPreservesHistoryAndBudget(t *testing.T) {
 	budget, err := db.AnalysisBudget(context.Background(), "development-1")
 	if err != nil || budget.Round != 1 || budget.Total != 1 {
 		t.Fatalf("migration reset budget: %+v %v", budget, err)
+	}
+}
+
+func TestRollingScopePreservesHistoryAndSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "scope.db")
+	db, err := store.Open(path, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { db.Close() }()
+	if err = db.Reserve(ctx, []string{"1", "2"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := ticket.Snapshot{ID: "1", DepartmentID: "7", Subject: "old", Complete: true}
+	if err = db.Save(ctx, ticket.RawSnapshot{}, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	req := store.AnalysisRequest{TicketID: "1", Kind: "bub", InputHash: "synthetic", SchemaVersion: "test", RequestedModel: "test", Round: "test"}
+	run, _, err := db.StartAnalysis(ctx, req, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishAnalysis(ctx, run.ID, "test", json.RawMessage("{}"), nil); err != nil {
+		t.Fatal(err)
+	}
+	db.EnableRecentScope()
+	if rows, err := db.List(ctx, "", ""); err != nil || len(rows) != 0 {
+		t.Fatalf("old rows leaked before first selection: %v %v", rows, err)
+	}
+	if err = db.ReplaceRecent(ctx, []string{"1", "2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ReplaceRecent(ctx, []string{"2", "3"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ReplaceRecent(ctx, []string{"3", "3"}); err == nil {
+		t.Fatal("duplicate selection accepted")
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err = db.ReplaceRecent(cancelled, []string{"4"}); err == nil {
+		t.Fatal("cancelled replacement committed")
+	}
+	db.Close()
+	db, err = store.Open(path, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.EnableRecentScope()
+	ids, err := db.IDs(ctx)
+	if err != nil || len(ids) != 2 || ids[0] != "2" || ids[1] != "3" {
+		t.Fatalf("selection lost: %v %v", ids, err)
+	}
+	state, err := db.State(ctx)
+	if err != nil || state.Selected != 2 || state.Ready != 0 {
+		t.Fatalf("counts include excluded history: %+v %v", state, err)
+	}
+	view, err := db.Analysis(ctx, req)
+	if err != nil || view.Success == nil {
+		t.Fatal("excluded AI history was lost")
+	}
+	old, err := db.Get(ctx, "1")
+	if err != nil || !old.OutsideScope || old.Subject != "old" {
+		t.Fatalf("old snapshot lost or active: %+v %v", old, err)
+	}
+	if err = db.ReplaceRecent(ctx, []string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	old, err = db.Get(ctx, "1")
+	if err != nil || old.OutsideScope || old.Subject != "old" {
+		t.Fatal("could not restore retained history")
 	}
 }

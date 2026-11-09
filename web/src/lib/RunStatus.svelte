@@ -1,5 +1,5 @@
 <!-- input: Go 同步/AI 状态、精确恢复候选、会话令牌及刷新回调。 -->
-<!-- output: Bub活动任务、按任务分类积压及持久失败/重试详情。 -->
+<!-- output: 当前同步范围、Bub活动任务、按任务分类积压及持久失败/重试详情。 -->
 <!-- pos: 运行状态页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onDestroy } from "svelte";
@@ -44,10 +44,10 @@
       <div class="mb-6 flex flex-wrap items-center justify-between gap-3"><h2 id="sync-title" class="font-semibold">只读同步</h2><Badge variant={status.sync.last_error ? "destructive" : "secondary"}>{status.runtime?.sync_running ? "同步进行中" : status.sync.last_error ? "最近同步未完成" : status.sync.batch_upper ? "分批处理中" : status.sync.watermark ? "已完成一轮同步" : "等待首次同步"}</Badge></div>
       <dl class="grid gap-x-8 gap-y-5 text-sm sm:grid-cols-2">
         <div><dt class="text-muted-foreground">本次服务启动</dt><dd class="mt-1 tabular-nums">{dateTime(status.runtime?.started_at)}</dd></div>
-        <div><dt class="text-muted-foreground">工单创建时间起点</dt><dd class="mt-1">{dateTime(status.runtime?.sync_start_time)}</dd></div>
+        <div><dt class="text-muted-foreground">同步范围</dt><dd class="mt-1">{status.runtime?.sync_recent_limit ? `按创建时间滚动最新 ${status.runtime.sync_recent_limit} 张` : dateTime(status.runtime?.sync_start_time)}</dd></div>
         <div><dt class="text-muted-foreground">下次定时调度</dt><dd class="mt-1">{status.runtime?.sync_running ? "当前同步仍在进行，完成后继续调度" : dateTime(status.runtime?.next_sync_at)}</dd></div>
-        <div><dt class="text-muted-foreground">本轮发现进度</dt><dd class="mt-1">已扫描 {status.sync.discovery_offset ?? 0} 条列表记录 · {status.sync.discovery_done ? "扫描完成" : "分页发现中"}</dd></div>
-        <div><dt class="text-muted-foreground">当前待同步工作</dt><dd class="mt-1">{status.runtime?.last_sync_batch?.remaining ?? 0} 项（包含尚未完成的发现分页）</dd></div>
+        <div><dt class="text-muted-foreground">{status.runtime?.sync_recent_limit ? "当前已选工单" : "本轮发现进度"}</dt><dd class="mt-1">{#if status.runtime?.sync_recent_limit}{status.sync.selected} / {status.runtime.sync_recent_limit} 张{:else}已扫描 {status.sync.discovery_offset ?? 0} 条列表记录 · {status.sync.discovery_done ? "扫描完成" : "分页发现中"}{/if}</dd></div>
+        <div><dt class="text-muted-foreground">当前待同步工作</dt><dd class="mt-1">{status.runtime?.last_sync_batch?.remaining ?? 0} 项{#if !status.runtime?.sync_recent_limit}（包含尚未完成的发现分页）{/if}</dd></div>
         <div><dt class="text-muted-foreground">最近批次</dt><dd class="mt-1">保存 {status.runtime?.last_sync_batch?.fetched ?? 0} · 失败 {status.runtime?.last_sync_batch?.failed ?? 0} · 停止 {status.runtime?.last_sync_batch?.stopped ?? 0}</dd></div>
         <div><dt class="text-muted-foreground">已停止同步</dt><dd class="mt-1">{status.runtime?.stopped_count ?? 0} 张，历史保留</dd></div>
         <div><dt class="text-muted-foreground">当前部门 ID</dt><dd class="mt-1 break-all">{status.sync.department_id}</dd></div>

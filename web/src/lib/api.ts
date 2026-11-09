@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 同源API类型、统一任务标签及安全错误说明。
+// output: 滚动范围状态、同源API类型、统一任务标签及安全错误说明。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -98,6 +98,7 @@ export type SystemStatus = {
   runtime: {
     sync_running: boolean;
     sync_start_time?: string;
+    sync_recent_limit?: number;
     next_sync_at?: string;
     stopped_count?: number;
     last_sync_batch?: { fetched: number; failed: number; stopped: number; remaining: number };

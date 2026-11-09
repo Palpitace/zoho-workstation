@@ -1,5 +1,5 @@
 // input: Zoho OAuth 配置、限定部门与调用方 context。
-// output: 有界创建时间发现与分批增量； 完整只读会话、固定 ID 复核、失效元数据复核及安全限流诊断。
+// output: 最近列表分页漂移拒绝； 有界创建时间发现与分批增量； 完整只读会话、固定 ID 复核、失效元数据复核及安全限流诊断。
 // pos: Zoho HTTP 与本地采样的边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho
 
@@ -187,10 +187,11 @@ func (c *Client) Recent(ctx context.Context, limit int) ([]string, error) {
 			if !idPattern.MatchString(id) || department != c.cfg.DepartmentID {
 				return nil, errors.New("ticket identity or department mismatch")
 			}
-			if !seen[id] {
-				ids = append(ids, id)
-				seen[id] = true
+			if seen[id] {
+				return nil, errors.New("recent ticket pages shifted; retry selection")
 			}
+			ids = append(ids, id)
+			seen[id] = true
 		}
 		offset += len(rows)
 		if len(rows) < size {

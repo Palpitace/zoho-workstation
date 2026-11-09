@@ -104,3 +104,5 @@ Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`�
 历史失败恢复：自动失败上限不因升级/重启重置。运行状态可确认固定失败版本，每票补执行一次；仍使用原调度器和持久历史，未开始的确认不跨重启保留。接口与约束见 internal/app/AGENTS.md，用户操作见 docs/downloads.md。
 
 Issue #9：运行状态页提供Bub总结/案例/建议的任务积压、活动工单及持久重试诊断；列表和详情共用任务状态。上游HTTP和响应格式异常分别诊断，禁止日志记录供应商响应正文；细节见 internal/app/AGENTS.md。
+
+2026-11-09 用户确认滚动最新50张测试版：按所配置Labelife部门创建时间倒序选取；新入旧出。旧工单仅退出列表、同步及自动分析，本地历史不删除。SYNC_RECENT_LIMIT 缺省50，优先于日期起点；显式0才恢复原发现逻辑。详见 internal/store/AGENTS.md 和 docs/downloads.md。

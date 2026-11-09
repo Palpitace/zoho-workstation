@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 共享Bub槽轮转调度、持久恢复及白名单错误字段日志。
+// output: 当前滚动范围内共享Bub槽轮转调度、持久恢复及白名单错误字段日志。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -63,6 +63,12 @@ func New(cfg config.Config, db *store.Store, client *zoho.Client) (*App, error) 
 	}
 	if cfg.SyncBatchSize < 1 || cfg.SyncBatchSize > 50 || cfg.SyncConcurrency < 1 || cfg.SyncConcurrency > 5 {
 		return nil, errors.New("invalid sync batch size or concurrency")
+	}
+	if cfg.RecentLimit != 0 && cfg.RecentLimit != 50 {
+		return nil, errors.New("invalid recent ticket limit")
+	}
+	if cfg.RecentLimit > 0 {
+		db.EnableRecentScope()
 	}
 	return &App{cfg: cfg, db: db, zoho: client, csrf: hex.EncodeToString(token[:]), busy: map[string]bool{}, lastError: map[string]string{}, analysisWake: make(chan struct{}, 1), recovery: map[string]map[string]int64{}}, nil
 }
@@ -146,10 +152,12 @@ func (a *App) loop() {
 
 // Automatic analysis follows saved business data, not the development manifest.
 func (a *App) automaticallyEligible(record store.Record) bool {
-	if created, err := time.Parse(time.RFC3339Nano, record.CreatedTime); err == nil && created.Before(a.cfg.SyncStartTime) {
-		return false
+	if a.cfg.RecentLimit == 0 {
+		if created, err := time.Parse(time.RFC3339Nano, record.CreatedTime); err == nil && created.Before(a.cfg.SyncStartTime) {
+			return false
+		}
 	}
-	return !record.Pending && !record.SyncStopped && record.Complete
+	return !record.OutsideScope && !record.Pending && !record.SyncStopped && record.Complete
 }
 
 func (a *App) RequestSync() error {
@@ -176,7 +184,7 @@ func (a *App) RequestSync() error {
 		for {
 			started := time.Now()
 			ctx, cancel := context.WithTimeout(a.ctx, 5*time.Minute)
-			result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{StartTime: a.cfg.SyncStartTime, MaxTickets: a.cfg.SyncBatchSize, Concurrency: a.cfg.SyncConcurrency, Lookback: a.cfg.SyncLookback})
+			result, err := syncer.Run(ctx, a.zoho, a.db, syncer.Options{RecentLimit: a.cfg.RecentLimit, StartTime: a.cfg.SyncStartTime, MaxTickets: a.cfg.SyncBatchSize, Concurrency: a.cfg.SyncConcurrency, Lookback: a.cfg.SyncLookback})
 			cancel()
 			a.mu.Lock()
 			a.lastSyncResult = result

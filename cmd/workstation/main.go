@@ -1,5 +1,5 @@
 // input: 根 .env、命令行采样数量及本地 SQLite 数据。
-// output: 落盘轮转日志、离线检查、受控命令、有界并发采样、显式 IP 监听和自动同步/分析服务。
+// output: 命令与服务共用滚动范围、落盘轮转日志、离线检查、受控命令、有界并发采样、显式 IP 监听和自动同步/分析服务。
 // pos: Go 服务启动与生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package main
 
@@ -97,6 +97,9 @@ func run(logLevel *slog.LevelVar) error {
 		return err
 	}
 	defer db.Close()
+	if cfg.RecentLimit > 0 {
+		db.EnableRecentScope()
+	}
 	if command == "check" {
 		for _, name := range []string{"sync", "analysis"} {
 			release, err := db.Lock(name)
@@ -140,7 +143,7 @@ func run(logLevel *slog.LevelVar) error {
 			return err
 		}
 		defer release()
-		result, err := syncer.Run(ctx, client, db, syncer.Options{SampleSize: *size, MaxTickets: *maxTickets, Lookback: cfg.SyncLookback, Concurrency: cfg.SyncConcurrency})
+		result, err := syncer.Run(ctx, client, db, syncer.Options{RecentLimit: cfg.RecentLimit, SampleSize: *size, MaxTickets: *maxTickets, Lookback: cfg.SyncLookback, Concurrency: cfg.SyncConcurrency})
 		slog.Info("sample run finished", "fetched", result.Fetched, "failed", result.Failed, "remaining", result.Remaining)
 		return err
 	}

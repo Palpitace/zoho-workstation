@@ -1,5 +1,5 @@
 // input: 已保存工单、根配置和研发轮次/数量限制。
-// output: 脱敏副本、事实总结/独立知识任务的版本化输入及可追溯研发结果。
+// output: 排除滚动范围外输入； 脱敏副本、事实总结/独立知识任务的版本化输入及可追溯研发结果。
 // pos: 分析命令编排与本地验证入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -31,6 +31,9 @@ func analysisRequest(ctx context.Context, db *store.Store, cfg config.Config, id
 	snapshot, err := db.Get(ctx, id)
 	if err != nil {
 		return store.AnalysisRequest{}, nil, err
+	}
+	if snapshot.OutsideScope {
+		return store.AnalysisRequest{}, nil, errors.New("ticket is outside current recent scope")
 	}
 	return requestForRecord(ctx, db, cfg, snapshot, kind, round)
 }

@@ -17,3 +17,5 @@
 `serve` 提供同源 API、web/dist、自动同步及独立分析。具体周期、开发评估范围、调用计数和 POST 防护见 ../../internal/app/AGENTS.md。Bub 需要 python/.venv，不是纯 Go 单文件运行。
 
 `check` 只校验配置、SQLite/操作锁、前端及启用的 Python SDK 导入及代理 transport 实际构造（与 Bub 共用最小进程环境），不调用网络。main 在配置读取之前初始化终端+文件日志，记录安全错误和正常退出，10 MiB、3 个备份、7 天保留；路径固定 logs/workstation.log。不可写时直接报告终端错误，不假称日志已保存。
+
+滚动测试版所有命令在打开数据库后启用 SYNC_RECENT_LIMIT 范围，CLI sample 同样刷新最新50张；该模式优先于-size（仅0模式继续使用显式采样数量），-max仍限制本轮详情数量。prepare/analyze 不会绕过范围读取或发送旧工单；旧研发清单含范围外ID时保留清单并明确报不可用，不自动删除。

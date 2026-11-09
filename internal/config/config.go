@@ -1,5 +1,5 @@
 // input: 根目录 .env 配置，不读取或覆盖进程环境。
-// output: 持续发现起始日期； 经校验的服务、监听 IP 及有界同步批次/并发配置，错误不含值。
+// output: 默认滚动最新50张与持续发现起始日期； 经校验的服务、监听 IP 及有界同步批次/并发配置，错误不含值。
 // pos: 配置加载边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package config
 
@@ -27,6 +27,7 @@ type Model struct {
 const DefaultSyncStartTime = "2026-11-05T00:00:00+08:00"
 
 type Config struct {
+	RecentLimit                                           int
 	SyncStartTime                                         time.Time
 	Environment, ListenHost, Port, LogLevel, DatabasePath string
 	Zoho                                                  Zoho
@@ -51,6 +52,10 @@ func Load(path string) (Config, error) {
 	c.SyncStartTime, err = time.Parse(time.RFC3339, value("SYNC_START_TIME", DefaultSyncStartTime))
 	if err != nil {
 		return c, errors.New("invalid SYNC_START_TIME: RFC3339 timestamp required")
+	}
+	c.RecentLimit, err = strconv.Atoi(value("SYNC_RECENT_LIMIT", "50"))
+	if err != nil || (c.RecentLimit != 0 && c.RecentLimit != 50) {
+		return c, errors.New("invalid SYNC_RECENT_LIMIT: expected 0 or 50")
 	}
 	c.Environment = value("APP_ENV", "development")
 	c.ListenHost = value("APP_LISTEN_HOST", "127.0.0.1")

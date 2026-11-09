@@ -1,5 +1,5 @@
 // input: 合成 Zoho HTTP 服务、可取消请求和隔离 SQLite 文件。
-// output: 持续发现起始边界/分页恢复及 初始/增量分批、重启、去重更新及取消不误推进水位的证据。
+// output: 滚动50张/分页失败保留范围；持续发现起始边界/分页恢复及 初始/增量分批、重启、去重更新及取消不误推进水位的证据。
 // pos: 同步编排公开边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer_test
 
@@ -278,5 +278,98 @@ func TestContinuousDiscoveryPersistsPagesAndFindsLaterArrivals(t *testing.T) {
 	retained, err := db.Get(ctx, "999")
 	if err != nil || retained.Subject != old.Subject || retained.SyncStopped || threadReads != beforeReads {
 		t.Fatal("before-cutoff history was fetched, changed or stopped")
+	}
+}
+
+func TestRollingLatestFiftyDoesNotFetchExcludedTickets(t *testing.T) {
+	ctx := context.Background()
+	newest := 100
+	failPage := false
+	duplicatePage := false
+	fetched := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		write := func(v any) { json.NewEncoder(w).Encode(v) }
+		switch {
+		case r.URL.Path == "/oauth/v2/token":
+			write(map[string]string{"access_token": "synthetic"})
+		case r.URL.Path == "/api/v1/tickets":
+			offset, _ := strconv.Atoi(r.URL.Query().Get("from"))
+			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+			if offset+limit > 50 || r.URL.Query().Get("sortBy") != "-createdTime" {
+				t.Error("unbounded or unordered discovery")
+			}
+			if failPage && offset > 0 {
+				w.WriteHeader(503)
+				return
+			}
+			rows := []map[string]string{}
+			for i := offset; i < offset+limit; i++ {
+				id := newest - i
+				if duplicatePage && offset > 0 {
+					id = newest
+				}
+				rows = append(rows, map[string]string{"id": strconv.Itoa(id), "departmentId": "7"})
+			}
+			write(map[string]any{"data": rows})
+		case strings.HasSuffix(r.URL.Path, "/threads") || strings.HasSuffix(r.URL.Path, "/comments"):
+			write(map[string]any{"data": []any{}})
+		case strings.HasPrefix(r.URL.Path, "/api/v1/tickets/"):
+			id := strings.TrimPrefix(r.URL.Path, "/api/v1/tickets/")
+			fetched[id] = true
+			write(map[string]string{"id": id, "departmentId": "7", "subject": "Synthetic", "createdTime": "2026-11-06T00:00:00Z", "modifiedTime": "2026-11-06T00:00:00Z", "threadCount": "0", "commentCount": "0"})
+		default:
+			w.WriteHeader(500)
+		}
+	}))
+	defer server.Close()
+	client := zoho.New(config.Zoho{BaseURL: server.URL, AccountsURL: server.URL, DepartmentID: "7"}, server.Client())
+	db, err := store.Open(filepath.Join(t.TempDir(), "recent.db"), "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Reserve(ctx, []string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	opts := syncer.Options{RecentLimit: 50, MaxTickets: 1}
+	if _, err = syncer.Run(ctx, client, db, opts); err != nil {
+		t.Fatal(err)
+	}
+	if fetched["1"] {
+		t.Fatal("excluded ticket fetched")
+	}
+	ids, _ := db.IDs(ctx)
+	if len(ids) != 50 {
+		t.Fatalf("selected %d", len(ids))
+	}
+	newest = 101
+	failPage = true
+	if _, err = syncer.Run(ctx, client, db, opts); err == nil {
+		t.Fatal("partial selection accepted")
+	}
+	r, err := db.Get(ctx, "51")
+	if err != nil || r.OutsideScope {
+		t.Fatal("partial failure replaced previous scope")
+	}
+	failPage = false
+	duplicatePage = true
+	if _, err = syncer.Run(ctx, client, db, opts); err == nil {
+		t.Fatal("shifted duplicate page accepted")
+	}
+	duplicatePage = false
+	if _, err = syncer.Run(ctx, client, db, opts); err != nil {
+		t.Fatal(err)
+	}
+	r, err = db.Get(ctx, "51")
+	if err != nil || !r.OutsideScope {
+		t.Fatal("oldest ticket did not leave scope")
+	}
+	r, err = db.Get(ctx, "101")
+	if err != nil || r.OutsideScope {
+		t.Fatal("newest ticket not selected")
+	}
+	ids, _ = db.IDs(ctx)
+	if len(ids) != 50 {
+		t.Fatalf("rolling scope grew: %d", len(ids))
 	}
 }

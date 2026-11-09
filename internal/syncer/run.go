@@ -1,4 +1,4 @@
-// input: 只读 Zoho 客户端、SQLite 存储、创建起始时间/显式采样及回查窗口。
+// input: 最新50张或时间起点范围、只读 Zoho 客户端、SQLite 存储、创建起始时间/显式采样及回查窗口。
 // output: 有界并发读取、串行持久化及合并/删除/移出停止；限流取消不丢水位。
 // pos: 拉取、清洗与保存的同步编排边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer
@@ -19,6 +19,7 @@ import (
 )
 
 type Options struct {
+	RecentLimit int
 	StartTime   time.Time
 	SampleSize  int
 	MaxTickets  int
@@ -68,6 +69,18 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 		}
 	}()
 	discoveryPending := false
+	if opts.RecentLimit > 0 {
+		db.EnableRecentScope()
+		ids, err := client.Recent(ctx, opts.RecentLimit)
+		if err != nil {
+			return result, fmt.Errorf("refresh recent scope: %w", err)
+		}
+		if err = db.ReplaceRecent(ctx, ids); err != nil {
+			return result, err
+		}
+		opts.StartTime = time.Time{}
+	}
+
 	if !opts.StartTime.IsZero() {
 		cycle, start := until.Format(time.RFC3339Nano), opts.StartTime.UTC().Format(time.RFC3339Nano)
 		offset := state.DiscoveryOffset
@@ -89,7 +102,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	if err != nil {
 		return result, err
 	}
-	if len(ids) == 0 && opts.StartTime.IsZero() {
+	if len(ids) == 0 && opts.StartTime.IsZero() && opts.RecentLimit == 0 {
 		ids, err = client.Recent(ctx, opts.SampleSize)
 		if err != nil {
 			return result, fmt.Errorf("select sample: %w", err)
@@ -147,7 +160,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 		if err != nil {
 			return result, errors.New("stored synchronization watermark is invalid")
 		}
-		if opts.StartTime.IsZero() {
+		if opts.StartTime.IsZero() && opts.RecentLimit == 0 {
 			candidates, err = client.Changed(ctx, candidates, since.Add(-opts.Lookback), until)
 		} else {
 			known := make(map[string]string, len(candidates))
