@@ -1,5 +1,5 @@
 # input: 已构建 web/dist、Playwright/Chromium 和脚本内合成 API 响应。
-# output: Bub活动/重试状态一致性、逐票刷新及恢复确认的浏览器证据。
+# output: Issue #10 范围恢复/缓存待确认；Bub活动/重试状态一致性、逐票刷新及恢复确认的浏览器证据。
 # pos: 无真实服务调用的 AI 界面验收。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import copy
 import functools
@@ -161,6 +161,22 @@ def main():
             expect(summary.get_by_text("其他分析任务正在执行",exact=False)).to_be_visible()
             expect(summary.get_by_text("最近总结失败",exact=True)).to_have_count(0)
             expect(summary.get_by_text("上游限流（429）",exact=False)).to_be_visible()
+            status["runtime"]["sync_recent_limit"] = 50
+            status["runtime"]["last_sync_batch"] = {"stage": "selection"}
+            status["sync"]["recent_confirmed"] = False
+            status["sync"]["last_error"] = "recent selection unstable after 3 attempts; retry pending"
+            page.get_by_role("link", name="工单", exact=True).click()
+            expect(page.get_by_text("最新工单范围待确认，暂显示本地缓存；同步成功前不自动分析缓存工单。", exact=True)).to_be_visible()
+            expect(row).to_be_visible()
+            page.get_by_role("link", name="运行状态", exact=True).click()
+            expect(page.get_by_text("本地缓存（范围待确认）", exact=True)).to_be_visible()
+            expect(page.get_by_text("工单范围选取失败，等待重试：", exact=False)).to_be_visible()
+            if screenshot := os.environ.get("RECENT_UI_SCREENSHOT"):
+                page.screenshot(path=screenshot, full_page=True)
+            status["sync"]["recent_confirmed"] = True
+            status["sync"]["last_error"] = ""
+            page.clock.run_for(5100)
+            expect(page.get_by_text("最新工单范围待确认，暂显示本地缓存；同步成功前不自动分析缓存工单。", exact=True)).to_have_count(0)
             assert not errors, errors
             if screenshot := os.environ.get("AI_UI_SCREENSHOT"):
                 page.screenshot(path=screenshot, full_page=True)

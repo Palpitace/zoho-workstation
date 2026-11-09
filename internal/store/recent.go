@@ -1,5 +1,5 @@
 // input: 已完整验证的最新工单 ID 集合。
-// output: 原子替换活动范围，保留范围外快照和 AI 历史。
+// output: 确认远端空/非空选择、原子替换活动范围，保留范围外快照和 AI 历史。
 // pos: 滚动测试范围持久化。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -38,6 +38,9 @@ func (s *Store) ReplaceRecent(ctx context.Context, ids []string) error {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO recent_tickets(id) VALUES(?)", id); err != nil {
 			return err
 		}
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE sync_state SET recent_confirmed=1 WHERE id=1"); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

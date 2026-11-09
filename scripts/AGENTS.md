@@ -37,3 +37,5 @@ check_knowledge_ui.py 使用相同的静态服务和合成 API，验证文档导
 知识增量：smoke_package 在异地解压目录实际调用 documents.py 解析合成 Markdown，并导入 knowledge.py 校验无工具建议 Schema，不访问模型；同时继续验证 native SDK 库、代理和本机启动。
 
 Issue #9：check_ai_ui 复用现有浏览器验证，增加Bub活动任务链接/耗时/重试次数、429提示，以及其他工单占用槽时本工单仍显示等待重试的回归。全部合成数据，无真实服务调用。
+
+Issue #10：check_ai_ui追加首次缓存可见、范围待确认、选取失败提示与确认后提示消失的浏览器验收；RECENT_UI_SCREENSHOT可保存待确认状态截图。

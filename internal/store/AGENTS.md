@@ -64,4 +64,4 @@ SOP 导入始终为 draft，只有 PublishKnowledge 显式操作生效。Replace
 
 Issue #9：AnalysisView 增加 task_state/attempts，尝试次数按当前输入/Schema/模型计算且不包含本地 invalid；冷却期 retry_waiting，到期 pending，实际 running 才显示执行中，invalid 为 manual。Active 仅内部使用，来自同次历史查询，保留旧输入仍在执行的记录。继续使用 ai_runs，无迁移；安全HTTP错误文本随失败保存，重启保留，旧成功不清空。
 
-滚动测试版：EnableRecentScope 启用当前 Store 的范围过滤，IDs/List/State 仅查询 recent_tickets 成员，首次空集合不会暴露旧数据。ReplaceRecent 在事务中替换完整集合并 Reserve 新ID，失败不改变旧集合；Get 保留历史读取并标记 OutsideScope。只新增成员表，不删除工单/AI/知识历史，不复用表示已合并删除的 sync_stopped。重启后成员集合保留，配置0可重新查询全部历史。
+滚动测试版：EnableRecentScope 启用当前 Store 的范围过滤，IDs 只查询已确认成员；首次远端未确认时 List/State 展示按创建时间排序的本地最新50张缓存，OutsideScope=true，不参与同步或AI。ReplaceRecent 在事务中替换完整集合并 Reserve 新ID，失败不改变旧集合；Get 保留历史读取并标记 OutsideScope。新增 recent_confirmed 列区分未确认和已确认空集合，旧非空成员自动迁移为已确认；不删除工单/AI/知识历史，不复用表示已合并删除的 sync_stopped。重启后成员集合保留，配置0可重新查询全部历史。

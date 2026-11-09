@@ -99,3 +99,5 @@ GET `/api/tickets/:id/knowledge` 独立返回 case/advice 状态和来源快照�
 | tasks.go | 状态派生 | 统一任务状态、活动任务及分类积压，无新队列 |
 
 滚动测试版在 New 时启用存储范围，首次选取前不调度旧工单；列表/统计/自动Bub、Jev、案例和建议仅使用当前50张。手动分析和案例保存再次读取 OutsideScope，防止旧列表或已退出范围的任务派生新操作。范围切换前已发出的请求允许结束，历史结果保留。状态API返回 sync_recent_limit。
+
+Issue #10：首次远端范围未确认时仅展示本地最新50张缓存，自动资格及手动请求仍检查 OutsideScope。同步批次日志新增 stage/outcome，明确失败与no_changes；不把0处理量当成功。

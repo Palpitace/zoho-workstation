@@ -1,5 +1,5 @@
 // input: 最新50张或时间起点范围、只读 Zoho 客户端、SQLite 存储、创建起始时间/显式采样及回查窗口。
-// output: 有界并发读取、串行持久化及合并/删除/移出停止；限流取消不丢水位。
+// output: Issue #10 范围恢复/缓存待确认；有界并发读取、串行持久化及合并/删除/移出停止；限流取消不丢水位。
 // pos: 拉取、清洗与保存的同步编排边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer
 
@@ -27,10 +27,11 @@ type Options struct {
 	Lookback    time.Duration
 }
 type Result struct {
-	Fetched   int `json:"fetched"`
-	Failed    int `json:"failed"`
-	Stopped   int `json:"stopped"`
-	Remaining int `json:"remaining"`
+	Stage     string `json:"stage"`
+	Fetched   int    `json:"fetched"`
+	Failed    int    `json:"failed"`
+	Stopped   int    `json:"stopped"`
+	Remaining int    `json:"remaining"`
 }
 
 // Run is serialized by the application. Failed IDs are durable retry work,
@@ -48,6 +49,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	if opts.SampleSize < 1 || opts.SampleSize > 50 || opts.MaxTickets < 0 || opts.Lookback < 0 || opts.Concurrency < 1 || opts.Concurrency > 5 {
 		return result, errors.New("invalid synchronization limits")
 	}
+	result.Stage = "prepare"
 	state, err := db.State(ctx)
 	if err != nil {
 		return result, err
@@ -68,6 +70,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 			runErr = errors.Join(runErr, fmt.Errorf("record synchronization result: %w", err))
 		}
 	}()
+	result.Stage = "selection"
 	discoveryPending := false
 	if opts.RecentLimit > 0 {
 		db.EnableRecentScope()
@@ -155,6 +158,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 			candidates = append(candidates, id)
 		}
 	}
+	result.Stage = "changes"
 	if state.Watermark != "" {
 		since, err := time.Parse(time.RFC3339Nano, state.Watermark)
 		if err != nil {
@@ -173,6 +177,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 			return result, fmt.Errorf("find changed tickets: %w", err)
 		}
 	}
+	result.Stage = "details"
 	ids = append(candidates, retries...)
 	sort.SliceStable(ids, func(i, j int) bool { return attemptedAt[ids[i]].Before(attemptedAt[ids[j]]) })
 	result.Remaining = len(ids)
@@ -254,6 +259,7 @@ func Run(ctx context.Context, client *zoho.Client, db *store.Store, opts Options
 	if result.Failed > 0 {
 		return result, fmt.Errorf("synchronization deferred: %d ticket(s) failed; retry state retained", result.Failed)
 	}
+	result.Stage = "complete"
 	return result, nil
 }
 

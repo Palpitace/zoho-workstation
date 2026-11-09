@@ -1,5 +1,5 @@
 // input: 合成 Zoho HTTP 响应及隔离 httptest 服务。
-// output: 超过50条的分组增量及 分页、权限回退、完整线程及计数下界的公开 API 回归证据。
+// output: Issue #10 范围恢复/缓存待确认；超过50条的分组增量及 分页、权限回退、完整线程及计数下界的公开 API 回归证据。
 // pos: 外部 API 边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho_test
 
@@ -352,6 +352,55 @@ func TestDiscoveryValidatesPageBeforeAdvancing(t *testing.T) {
 			}
 			if err != nil || len(ids) != 1 || ids[0] != "1" || next != 27 || !done {
 				t.Fatalf("cutoff: %v %d %v %v", ids, next, done, err)
+			}
+		})
+	}
+}
+
+// A one-based/clamped offset service reproduces the page-boundary overlap in #10.
+func TestRecentSelectionAvoidsPageBoundaryAndRetriesDuplicates(t *testing.T) {
+	for _, mode := range []string{"boundary", "recover", "unstable"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/oauth/v2/token" {
+					fmt.Fprint(w, `{"access_token":"synthetic"}`)
+					return
+				}
+				calls++
+				from, _ := strconv.Atoi(r.URL.Query().Get("from"))
+				size, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+				from = max(1, from)
+				rows := []map[string]string{}
+				for i := from; i < from+size; i++ {
+					id := 101 - i
+					if mode == "unstable" || (mode == "recover" && calls == 1) {
+						if i == from+size-1 {
+							id = 101 - from
+						}
+					}
+					rows = append(rows, map[string]string{"id": strconv.Itoa(id), "departmentId": "7"})
+				}
+				json.NewEncoder(w).Encode(map[string]any{"data": rows})
+			}))
+			defer server.Close()
+			client := zoho.New(config.Zoho{BaseURL: server.URL, AccountsURL: server.URL, DepartmentID: "7"}, server.Client())
+			ids, err := client.Recent(context.Background(), 50)
+			if mode == "unstable" {
+				if err == nil || calls != 3 {
+					t.Fatalf("unbounded/absent retry: calls=%d err=%v", calls, err)
+				}
+				return
+			}
+			if err != nil || len(ids) != 50 || ids[0] != "100" || ids[49] != "51" {
+				t.Fatalf("latest set incomplete: count=%d err=%v", len(ids), err)
+			}
+			want := 1
+			if mode == "recover" {
+				want = 2
+			}
+			if calls != want {
+				t.Fatalf("calls=%d want=%d", calls, want)
 			}
 		})
 	}

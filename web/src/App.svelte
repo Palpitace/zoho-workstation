@@ -1,5 +1,5 @@
 <!-- input: 浏览器导航、Go 查询/操作 API 及会话防护令牌。 -->
-<!-- output: 工单/知识/状态页面编排，区分当前任务与全局占用。 -->
+<!-- output: Issue #10 范围恢复/缓存待确认；工单/知识/状态页面编排，区分当前任务与全局占用。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -205,9 +205,12 @@
     <main aria-busy={refreshing} id="main-content" tabindex="-1" class="mx-auto max-w-7xl p-5 outline-none lg:p-8">
       {#if actionErrors.sync}<p role="alert" class="mb-5 text-sm text-destructive">同步操作：{actionErrors.sync}</p>{/if}
       {#if notices.sync}<p role="status" class="mb-5 text-sm text-muted-foreground">同步操作：{notices.sync}</p>{/if}
+      {#if status?.runtime?.sync_recent_limit && status.sync.recent_confirmed === false}
+        <p role="status" class="mb-5 text-sm text-muted-foreground">最新工单范围待确认，暂显示本地缓存；同步成功前不自动分析缓存工单。</p>
+      {/if}
       {#if !statusPage && !knowledgePage && status}
         <dl class="mb-7 flex flex-wrap gap-x-7 gap-y-2 border-b pb-5 text-sm text-muted-foreground">
-          <div class="flex gap-2"><dt>已发现</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.selected}</dd></div>
+          <div class="flex gap-2"><dt>{status.runtime?.sync_recent_limit && status.sync.recent_confirmed === false ? "本地缓存" : "已发现"}</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.selected}</dd></div>
           <div class="flex gap-2"><dt>已有快照</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.ready}</dd></div>
           <div class="flex gap-2"><dt>待首次保存</dt><dd class="font-medium text-foreground tabular-nums">{Math.max(0, status.sync.selected - status.sync.ready)}</dd></div>
           <div class="flex gap-2"><dt>失败或不完整</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.failed}</dd></div>

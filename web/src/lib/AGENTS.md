@@ -78,3 +78,5 @@ TicketAdvice 位于事实总结之后、沟通记录之前，GET /api/tickets/:i
 Issue #9：API task_state 优先决定列表/详情徽标，冷却期间只显示等待重试，截止已过显示待执行；历史错误保留。RunStatus 的 Bub 区块按任务统计总结/案例/建议，展示活动工单、运行秒数和可展开的重试详情；计数明确不是工单数。429/HTTP错误/响应格式错误有独立说明，旧上游错误注明诊断缺失。详情的全局槽占用提示为其他任务，不等同于当前任务执行。
 
 运行状态根据 sync_recent_limit 显示“按创建时间滚动最新50张”，避免把日期起点误显示为当前范围；列表及任务统计使用后端已过滤数据。
+
+Issue #10：SystemStatus.sync.recent_confirmed 区分待确认缓存与已确认空范围；RunStatus显示缓存标签，并按last_sync_batch.stage区分选取和详情失败。

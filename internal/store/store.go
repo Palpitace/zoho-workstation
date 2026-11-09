@@ -1,5 +1,5 @@
 // input: SQLite 路径、固定部门和原始/规范化工单快照。
-// output: 可恢复滚动范围、工单、同步进度、可追溯知识版本及同库操作锁。
+// output: 待确认缓存展示与可恢复滚动范围、工单、同步进度、可追溯知识版本及同库操作锁。
 // pos: Go 独占数据库边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -29,6 +29,7 @@ type Store struct {
 }
 
 type State struct {
+	RecentConfirmed bool   `json:"recent_confirmed"`
 	Complete        int    `json:"complete"`
 	Stopped         int    `json:"stopped"`
 	DiscoveryCycle  string `json:"discovery_cycle,omitempty"`
@@ -112,7 +113,7 @@ func Open(path, department string) (*Store, error) {
 			return nil, err
 		}
 	}
-	for name, definition := range map[string]string{"discovery_cycle": "TEXT NOT NULL DEFAULT ''", "discovery_start": "TEXT NOT NULL DEFAULT ''", "discovery_offset": "INTEGER NOT NULL DEFAULT 0", "discovery_done": "INTEGER NOT NULL DEFAULT 0"} {
+	for name, definition := range map[string]string{"recent_confirmed": "INTEGER NOT NULL DEFAULT 0", "discovery_cycle": "TEXT NOT NULL DEFAULT ''", "discovery_start": "TEXT NOT NULL DEFAULT ''", "discovery_offset": "INTEGER NOT NULL DEFAULT 0", "discovery_done": "INTEGER NOT NULL DEFAULT 0"} {
 		var exists int
 		if err = db.QueryRow("SELECT count(*) FROM pragma_table_info('sync_state') WHERE name=?", name).Scan(&exists); err != nil {
 			db.Close()
@@ -148,6 +149,11 @@ func Open(path, department string) (*Store, error) {
 	if bound != department {
 		db.Close()
 		return nil, errors.New("database belongs to another department; use a separate database")
+	}
+	// Preserve a previously confirmed nonempty scope when upgrading from the first rolling release.
+	if _, err = db.Exec("UPDATE sync_state SET recent_confirmed=1 WHERE recent_confirmed=0 AND EXISTS(SELECT 1 FROM recent_tickets)"); err != nil {
+		db.Close()
+		return nil, err
 	}
 	if err = s.initKnowledge(); err != nil {
 		db.Close()
@@ -277,8 +283,13 @@ type Record struct {
 	CheckedAt    string             `json:"checked_at,omitempty"`
 }
 
+const visibleRecentIDs = `SELECT id FROM recent_tickets UNION ALL SELECT id FROM
+ (SELECT id FROM tickets WHERE snapshot_json IS NOT NULL AND sync_stopped=0
+ ORDER BY julianday(json_extract(snapshot_json,'$.created_time')) DESC,id DESC LIMIT 50)
+ WHERE (SELECT recent_confirmed FROM sync_state WHERE id=1)=0`
+
 func (s *Store) List(ctx context.Context, query, status string) ([]Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at,sync_stopped FROM tickets WHERE (?=0 OR id IN (SELECT id FROM recent_tickets)) AND (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id`, s.recentOnly.Load(), query, query, status, status)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,snapshot_json,sync_error,checked_at,sync_stopped,(? AND id NOT IN (SELECT id FROM recent_tickets)) FROM tickets WHERE (?=0 OR id IN (`+visibleRecentIDs+`)) AND (?='' OR instr(lower(subject),lower(?))>0) AND (?='' OR status=?) ORDER BY modified_time DESC,id`, s.recentOnly.Load(), s.recentOnly.Load(), query, query, status, status)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +298,7 @@ func (s *Store) List(ctx context.Context, query, status string) ([]Record, error
 	for rows.Next() {
 		var r Record
 		var body []byte
-		if err = rows.Scan(&r.ID, &body, &r.SyncError, &r.CheckedAt, &r.SyncStopped); err != nil {
+		if err = rows.Scan(&r.ID, &body, &r.SyncError, &r.CheckedAt, &r.SyncStopped, &r.OutsideScope); err != nil {
 			return nil, err
 		}
 		r.Pending = body == nil
@@ -303,12 +314,12 @@ func (s *Store) List(ctx context.Context, query, status string) ([]Record, error
 
 func (s *Store) State(ctx context.Context) (State, error) {
 	var v State
-	err := s.db.QueryRowContext(ctx, `WITH scoped AS (SELECT * FROM tickets WHERE (?=0 OR id IN (SELECT id FROM recent_tickets))) SELECT department,watermark,batch_upper,last_attempt,last_error,discovery_cycle,discovery_start,discovery_offset,discovery_done,
+	err := s.db.QueryRowContext(ctx, `WITH scoped AS (SELECT * FROM tickets WHERE (?=0 OR id IN (`+visibleRecentIDs+`))) SELECT recent_confirmed,department,watermark,batch_upper,last_attempt,last_error,discovery_cycle,discovery_start,discovery_offset,discovery_done,
 		(SELECT count(*) FROM scoped),
 		(SELECT count(*) FROM scoped WHERE snapshot_json IS NOT NULL),
 		(SELECT count(*) FROM scoped WHERE sync_error!='' AND sync_stopped=0),
 		(SELECT count(*) FROM scoped WHERE json_extract(snapshot_json,'$.complete')=1 AND sync_stopped=0),
-		(SELECT count(*) FROM scoped WHERE sync_stopped=1) FROM sync_state WHERE id=1`, s.recentOnly.Load()).Scan(&v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.DiscoveryCycle, &v.DiscoveryStart, &v.DiscoveryOffset, &v.DiscoveryDone, &v.Selected, &v.Ready, &v.Failed, &v.Complete, &v.Stopped)
+		(SELECT count(*) FROM scoped WHERE sync_stopped=1) FROM sync_state WHERE id=1`, s.recentOnly.Load()).Scan(&v.RecentConfirmed, &v.DepartmentID, &v.Watermark, &v.BatchUpper, &v.LastAttempt, &v.LastError, &v.DiscoveryCycle, &v.DiscoveryStart, &v.DiscoveryOffset, &v.DiscoveryDone, &v.Selected, &v.Ready, &v.Failed, &v.Complete, &v.Stopped)
 	return v, err
 }
 

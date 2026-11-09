@@ -1,5 +1,5 @@
 // input: 合成 Zoho HTTP 服务、可取消请求和隔离 SQLite 文件。
-// output: 滚动50张/分页失败保留范围；持续发现起始边界/分页恢复及 初始/增量分批、重启、去重更新及取消不误推进水位的证据。
+// output: Issue #10 范围恢复/缓存待确认；滚动50张/分页失败保留范围；持续发现起始边界/分页恢复及 初始/增量分批、重启、去重更新及取消不误推进水位的证据。
 // pos: 同步编排公开边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer_test
 
@@ -298,14 +298,14 @@ func TestRollingLatestFiftyDoesNotFetchExcludedTickets(t *testing.T) {
 			if offset+limit > 50 || r.URL.Query().Get("sortBy") != "-createdTime" {
 				t.Error("unbounded or unordered discovery")
 			}
-			if failPage && offset > 0 {
+			if failPage {
 				w.WriteHeader(503)
 				return
 			}
 			rows := []map[string]string{}
 			for i := offset; i < offset+limit; i++ {
 				id := newest - i
-				if duplicatePage && offset > 0 {
+				if duplicatePage {
 					id = newest
 				}
 				rows = append(rows, map[string]string{"id": strconv.Itoa(id), "departmentId": "7"})
@@ -331,7 +331,25 @@ func TestRollingLatestFiftyDoesNotFetchExcludedTickets(t *testing.T) {
 	if err = db.Reserve(ctx, []string{"1"}); err != nil {
 		t.Fatal(err)
 	}
+	if err = db.Save(ctx, ticket.RawSnapshot{}, ticket.Snapshot{ID: "1", DepartmentID: "7", Complete: true, CreatedTime: "2026-11-05T00:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
 	opts := syncer.Options{RecentLimit: 50, MaxTickets: 1}
+	duplicatePage = true
+	failed, failErr := syncer.Run(ctx, client, db, opts)
+	if failErr == nil || failed.Stage != "selection" || len(fetched) != 0 {
+		t.Fatalf("selection failure escaped stage: %+v %v", failed, failErr)
+	}
+	cached, e := db.List(ctx, "", "")
+	if e != nil || len(cached) != 1 || !cached[0].OutsideScope {
+		t.Fatal("first failed selection hid cache or activated it")
+	}
+	state, e := db.State(ctx)
+	if e != nil || state.Watermark != "" || state.RecentConfirmed || state.LastError == "" {
+		t.Fatalf("failed selection recorded as complete: %+v %v", state, e)
+	}
+	duplicatePage = false
+
 	if _, err = syncer.Run(ctx, client, db, opts); err != nil {
 		t.Fatal(err)
 	}

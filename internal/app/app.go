@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 当前滚动范围内共享Bub槽轮转调度、持久恢复及白名单错误字段日志。
+// output: Issue #10 范围恢复/缓存待确认；当前滚动范围内共享Bub槽轮转调度、持久恢复及白名单错误字段日志。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -193,7 +193,15 @@ func (a *App) RequestSync() error {
 				a.lastError["sync"] = err.Error()
 			}
 			a.mu.Unlock()
-			slog.Info("automatic sync batch finished", "duration_ms", time.Since(started).Milliseconds(), "processed", result.Fetched+result.Failed+result.Stopped, "fetched", result.Fetched, "failed", result.Failed, "stopped", result.Stopped, "remaining", result.Remaining)
+			level := slog.LevelInfo
+			outcome := "success"
+			if err != nil {
+				level = slog.LevelWarn
+				outcome = "failed"
+			} else if result.Fetched+result.Failed+result.Stopped == 0 {
+				outcome = "no_changes"
+			}
+			slog.Log(a.ctx, level, "automatic sync batch finished", "stage", result.Stage, "outcome", outcome, "duration_ms", time.Since(started).Milliseconds(), "processed", result.Fetched+result.Failed+result.Stopped, "fetched", result.Fetched, "failed", result.Failed, "stopped", result.Stopped, "remaining", result.Remaining)
 			if a.ctx.Err() != nil {
 				return
 			}

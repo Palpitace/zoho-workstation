@@ -1,5 +1,5 @@
 // input: Zoho OAuth 配置、限定部门与调用方 context。
-// output: 最近列表分页漂移拒绝； 有界创建时间发现与分批增量； 完整只读会话、固定 ID 复核、失效元数据复核及安全限流诊断。
+// output: 单响应最新范围及有界异常重试； 有界创建时间发现与分批增量； 完整只读会话、固定 ID 复核、失效元数据复核及安全限流诊断。
 // pos: Zoho HTTP 与本地采样的边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package zoho
 
@@ -162,16 +162,13 @@ func (c *Client) get(ctx context.Context, path string, query url.Values) (json.R
 	return c.do(req)
 }
 
-// Recent is deliberately capped; persistence must reserve these IDs before detail reads.
+// Recent uses one bounded response, so a changing list cannot shift a page boundary.
 func (c *Client) Recent(ctx context.Context, limit int) ([]string, error) {
 	if limit < 1 || limit > 50 {
 		return nil, errors.New("sample limit must be between 1 and 50")
 	}
-	ids := []string{}
-	seen := map[string]bool{}
-	for offset := 0; len(ids) < limit && offset < limit; {
-		size := min(25, limit-offset)
-		body, err := c.get(ctx, "/tickets", url.Values{"departmentId": {c.cfg.DepartmentID}, "sortBy": {"-createdTime"}, "from": {strconv.Itoa(offset)}, "limit": {strconv.Itoa(size)}})
+	for attempt := 1; attempt <= 3; attempt++ {
+		body, err := c.get(ctx, "/tickets", url.Values{"departmentId": {c.cfg.DepartmentID}, "sortBy": {"-createdTime"}, "from": {"0"}, "limit": {strconv.Itoa(limit)}})
 		if err != nil {
 			return nil, err
 		}
@@ -179,26 +176,30 @@ func (c *Client) Recent(ctx context.Context, limit int) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(rows) > size {
+		if len(rows) > limit {
 			return nil, errors.New("ticket API ignored sampling limit")
 		}
+		ids := []string{}
+		seen := map[string]bool{}
+		duplicate := false
 		for _, row := range rows {
 			id, department := field(row, "id"), field(row, "departmentId")
 			if !idPattern.MatchString(id) || department != c.cfg.DepartmentID {
 				return nil, errors.New("ticket identity or department mismatch")
 			}
 			if seen[id] {
-				return nil, errors.New("recent ticket pages shifted; retry selection")
+				duplicate = true
 			}
-			ids = append(ids, id)
 			seen[id] = true
+			ids = append(ids, id)
 		}
-		offset += len(rows)
-		if len(rows) < size {
-			break
+		if !duplicate {
+			slog.Info("recent ticket selection completed", "stage", "selection", "attempt", attempt, "selected", len(ids), "recovered", attempt > 1)
+			return ids, nil
 		}
+		slog.Warn("recent ticket selection duplicate", "stage", "selection", "attempt", attempt, "will_retry", attempt < 3)
 	}
-	return ids, nil
+	return nil, errors.New("recent selection unstable after 3 attempts; retry pending")
 }
 
 // Changed prefers documented search; a search 403 switches only this client's
