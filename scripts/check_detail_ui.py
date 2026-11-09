@@ -91,6 +91,10 @@ with sync_playwright() as p:
 
     def route(r):
         path = r.request.url.split("?")[0]
+        if path.endswith("/knowledge"):
+            empty = {"current": None, "success": None, "stale": False}
+            r.fulfill(json={"case": empty, "advice": empty, "enabled": False, "busy": False})
+            return
         state["calls"] += 1
         if state["mode"] == "offline":
             r.abort("internetdisconnected")

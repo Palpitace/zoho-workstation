@@ -23,3 +23,5 @@
 搜索栏保留独立草稿和已应用的关键词/字段/日期；刷新、轮询、表头选择均不提交草稿。五列表头和历史开关立即查询，清除恢复默认条件。App 统一生成时间边界和查询参数；Jev waiting_for=bub 时阻止重复手动提交并显示等待理由。
 
 Issue #6：refresh 统一等待 status、详情和 analysis 的实际请求完成，不再使用 revision/effect 二次触发。首次无内容显示加载，已有内容时保留正文/结果，顶部固定宽度状态和旋转图标反馈，遵守 reduced motion。Promise.allSettled 独立处理失败端点、保留成功内容并提示旧数据；同一 AbortController 隔离新查询/导航，顶部手动刷新处理中合并重复点击，静默轮询不叠加请求。
+
+知识库导航使用 #/knowledge 与 #/knowledge/<id>，独立于工单 ID；query 中的 block/message 仅用于来源定位，不混入 API ID。知识页复用全局刷新节奏，更新版本信号不会丢弃编辑中的草稿。

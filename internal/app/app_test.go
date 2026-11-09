@@ -139,7 +139,7 @@ func TestAutomaticAnalysisRecoveryAndProtectedOperations(t *testing.T) {
 			aged = count > 0
 		}
 		json.Unmarshal(call("GET", "/api/status", "", "").Body.Bytes(), &status)
-		if status.AI["jev"].Success == 1 {
+		if status.AI["jev"].Success == 1 && status.Budget.Total == 64 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

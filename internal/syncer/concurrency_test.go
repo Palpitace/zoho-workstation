@@ -1,4 +1,4 @@
-// input: 隔离 SQLite 和带同步屏障、429/取消的合成 Zoho 服务。
+// input: 隔离 SQLite、乱序候选和带同步屏障、429/取消的合成 Zoho 服务。
 // output: 三路并发、批次上限、限流停发及水位/后续恢复的回归证据。
 // pos: 同步请求并发边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package syncer_test
@@ -83,7 +83,8 @@ func TestBoundedConcurrentSyncAndRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			if err = db.Reserve(context.Background(), []string{"1", "2", "3", "4", "5", "6"}); err != nil {
+			ids := []string{"1", "2", "4", "3", "5", "6"}
+			if err = db.Reserve(context.Background(), ids); err != nil {
 				t.Fatal(err)
 			}
 			client := zoho.New(config.Zoho{BaseURL: remote.URL, AccountsURL: remote.URL, DepartmentID: "7"}, remote.Client())
@@ -96,6 +97,12 @@ func TestBoundedConcurrentSyncAndRecovery(t *testing.T) {
 			state, _ := db.State(context.Background())
 			mu.Lock()
 			gotPeak, started := peak, len(seen)
+			var unstarted []string
+			for _, id := range ids {
+				if !seen[id] {
+					unstarted = append(unstarted, id)
+				}
+			}
 			recovering = true
 			mu.Unlock()
 			if gotPeak != 3 || started != 3 {
@@ -122,10 +129,10 @@ func TestBoundedConcurrentSyncAndRecovery(t *testing.T) {
 			if _, err = syncer.Run(context.Background(), client, db, syncer.Options{Concurrency: 3}); err != nil {
 				t.Fatal(err)
 			}
-			for _, id := range []string{"4", "5", "6"} {
+			for _, id := range unstarted {
 				record, e := db.Get(context.Background(), id)
-				if e != nil || record.Pending {
-					t.Fatal("unstarted ticket lost")
+				if e != nil || record.Pending || !record.Complete {
+					t.Fatalf("unstarted ticket not recovered: id=%s pending=%v complete=%v error=%v", id, record.Pending, record.Complete, e)
 				}
 			}
 		})

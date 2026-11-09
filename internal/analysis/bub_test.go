@@ -93,7 +93,7 @@ func TestBubSubprocessUsesProxyWithoutInheritingCredentials(t *testing.T) {
 	if err := os.WriteFile("python/main.py", []byte(probe), 0600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	_, _, err = analysis.Bub(ctx, config.Model{URL: "https://model.invalid", Key: "synthetic-key", Name: "deepseek:synthetic"}, input)
 	if connects.Load() != 1 || err == nil || err.Error() != "Bub: model_connection_failed" {

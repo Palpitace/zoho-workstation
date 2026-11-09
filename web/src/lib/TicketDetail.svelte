@@ -1,7 +1,8 @@
 <!-- input: Go 工单快照、独立分析结果、可用操作状态及回调。 -->
-<!-- output: 消息内历史引用独立折叠； 真实工单号链接、紧凑详情、明确合并/删除/移出状态及角色背景色、独立引用导航和折叠倒序会话。 -->
+<!-- output: 工单事实、独立参考建议、跨页消息定位和折叠倒序会话。 -->
 <!-- pos: 工单详情页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
+  import { tick, untrack } from "svelte";
   import { ArrowLeft, Paperclip } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
@@ -10,12 +11,28 @@
   import MessageBody from "./MessageBody.svelte";
   import JevAssessment from "./JevAssessment.svelte";
   import BubSummary from "./BubSummary.svelte";
+  import TicketAdvice from "./TicketAdvice.svelte";
 
-  let { ticket, loading, error, jev, bub, analysisLoading, analysisError, controls, onRerun }: {
+  let { ticket, loading, error, jev, bub, analysisLoading, analysisError, controls, onRerun, token = "", referenceID = "" }: {
+    token?: string; referenceID?: string;
     ticket: TicketRecord | null; loading: boolean; error: string;
     jev: JevView | null; bub: BubView | null; analysisLoading: boolean; analysisError: string;
     controls: Record<AIKind, ActionFeedback>; onRerun: (kind: AIKind) => void;
   } = $props();
+  let focusedReference = "";
+  $effect(() => {
+    const id = referenceID, current = ticket;
+    if (!id || !current || focusedReference === `${current.id}:${id}`) return;
+    untrack(() => { void tick().then(() => {
+      if (ticket?.id !== current.id || referenceID !== id) return;
+      const matches = current.messages?.filter((message) => message.id === id) || [];
+      if (matches.length !== 1) return;
+      const target = document.getElementById(`message-${matches[0].source}-${id}`);
+      if (!target) return;
+      for (let parent = target.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
+      target.focus({ preventScroll: true }); target.scrollIntoView({ block: "start" }); focusedReference = `${current.id}:${id}`;
+    }); });
+  });
   const newestMessages = $derived([...(ticket?.messages || [])].sort((a, b) => {
     const left = Date.parse(a.created_time), right = Date.parse(b.created_time);
     if (!Number.isFinite(left)) return Number.isFinite(right) ? 1 : 0;
@@ -99,6 +116,8 @@
     {#key ticket.id}
       <BubSummary view={bub} messages={ticket.messages || []} loading={analysisLoading} error={analysisError} control={controls.bub} onRerun={() => onRerun("bub")} />
     {/key}
+
+    {#key ticket.id}<TicketAdvice ticketID={ticket.id} {token} messages={ticket.messages || []} />{/key}
 
     {#key ticket.id}
     <details id="conversation" class="rounded-lg border" aria-labelledby="conversation-title">

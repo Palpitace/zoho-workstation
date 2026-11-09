@@ -1,6 +1,6 @@
 一旦我所属的文件夹有所变化请更新我。
 
-本目录负责固定 Python stdin/stdout 总结入口与锁定的 Bub Core 环境。
+本目录负责固定 Python stdin/stdout 总结、知识分析和离线文档提取入口及锁定环境。
 模块关系：Go 发送完整脱敏会话，本目录返回校验后的 JSON，Go 再次校验并持久化。
 不负责数据库、Zoho、工具执行、插件、持久会话记忆、Web 服务或企业微信。
 
@@ -58,6 +58,9 @@ v5 结果只有 device_info、customer_feedback、support_responses 三个必有
 | AGENTS.md | 目录约定 | 协议、运行、版本与能力边界 |
 | main.py | 固定入口 | 完整会话、SDK、三类可空事实与来源校验及网络错误分类 |
 | test_main.py | 合成契约验证 | 可空分类、角色/字段证据、完整会话及安全诊断 |
+| knowledge.py | 独立知识入口 | 带来源的历史案例和内部建议，不改变事实总结/Jev 输入 |
+| documents.py | 本地文档提取 | DOCX/PDF/Markdown 文本及页/段锚点，不完整内容明确拒绝静默成功 |
+| test_knowledge.py | 合成行为验证 | 案例执行/结果、建议来源、文档提取和无工具单次 SDK 调用 |
 | pyproject.toml | 依赖声明 | 稳定版本和 Python 兼容范围 |
 | uv.lock | 自动生成锁文件 | 固定全部解析依赖及校验信息 |
 | .venv/ | 忽略的安装产物 | 本机 Python 解释器与依赖 |
@@ -78,3 +81,23 @@ Schema 升级使 v4 旧结果过期，新自动运行仍限原开发集；没有
 Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索引及 message_ids 路径，不含正文/实际消息 ID。Python model_validator 以 ContractIssue 携带本地路径；Go 仅接受三个已知栏目、0..9 整数及固定字段，非法路径省略。界面已有错误文本可显示安全路径，真实性校验不放宽。Prompt 明确 JSON object 不保证引用，无法给出有效来源的事实必须省略，不编造 ID、不自动补引用；无新增内部模型纠错调用、依赖、Schema 升级或旧结果失效。合成测试覆盖缺/未知/角色错误引用、字段证据豁免、准确路径与恶意路径不泄漏。
 
 设备信息可选（2026-11-05 用户修正）：缺 device_info 字段默认空数组；设备条目无有效消息引用且不是产品/描述原文，或引用未知 ID 时，仅省略该设备条目，继续校验并返回客户反馈/客服处理。保留有依据设备条目；不补猜 ID、不增加模型请求。客户反馈/客服处理的缺引用、角色等规则仍严格。最终输出始终包含 device_info 数组，Go 对规范化后的输出继续严格复核。无 Schema 升级、旧结果不强制失效、未修改原会话。
+
+## 历史知识与内部建议（2026-11-09）
+
+`knowledge.py` 接收 `{task:"case"|"advice",input,config,schema_version}`，Schema 分别为 `bub-case-v1` / `bub-advice-v1`。input 为 `{ticket:<完整脱敏 Bub 快照>,summary:<当前事实总结>,sources?:[...]}`；case 不需要 sources，advice 最多八份由 Go 选定的来源。配置和返回 envelope 与 main.py 一致；固定安全错误为既有模型/代理错误加 `invalid_input`、`invalid_knowledge`、`knowledge_failed`，不输出模型原文或异常细节。两种任务各自创建无工具 Agent，单次 SDK 调用、75 秒进程内超时、无 SDK 重试或持久记忆；并发、重试、版本和保存仍由 Go 控制。
+
+input.summary_version 保存上游总结的版本标识，source.source_hash 保存所选知识内容版本；两者由 Go 提供。案例标题 ≤256 字、问题 ≤1500 字、每步 ≤250 字，产品 ≤128 字且须匹配工单产品字段或为被引用公开消息中的独立型号词，未知时为空。Go 另校验最终可检索正文大小，防止成功结果无法保存。
+
+案例输出 title/product/issue/steps/message_ids；steps 至多十项，包含 action、execution（confirmed/unknown）、outcome（resolved/unresolved/unknown）和消息引用。步骤须引用公开已发客服消息，执行确认及有效/无效结果须另有非混合作者的客户证据；comment 备注不能作为案例或当前建议的消息证据。unknown 执行只能对应 unknown 结果，只有客户来信也可保存空 steps 的问题案例。引用检查不证明语义真实，客服结案、沉默或用户采纳都不是效果证据。Go 仍二次校验，并以原工单确定产品适用范围。
+
+建议输出 steps（至多三项）/missing_information/conflicts；每项步骤包含 action/reason/source_ids/current_message_ids。source_ids 只能来自 Go 提供的已发布 SOP 或可用案例，当前消息引用只能来自本票。无相关来源则返回空步骤和缺失信息，不编造措施。Prompt 明确产品/版本适用性、SOP 优先、冲突和失败措施处理。建议单独保存和展示，不进入事实总结或 Jev，不自动回复、修改工单或执行操作。
+
+检索结果只是片段，不等于整份文档。Prompt 禁止从未提供的相邻章节猜测适用前提，必要条件不在片段中时要求核对完整 SOP 并暂缓相应操作。词面检索及机械引用校验不能证明已找到全部相关章节，正式使用仍需人工核对来源和操作条件。
+
+`documents.py` 仅接收 `{filename,content_base64}`，不读取任何指定路径、不联网、不调用模型。成功输出 `{ok:true,blocks:[{id,text}],incomplete,warnings}`；文件 ≤10 MiB、提取 UTF-8 文本 ≤256 KiB、单块 ≤8 KiB、总块数 ≤4096，超限拒绝而非截断。Markdown/TXT 使用 UTF-8，保留标题起始行；DOCX 按正文段落/表格顺序保留锚点；PDF 按页提取。长块以 `-part-N` 拆分且保留完整文字。DOCX ZIP 解压声明总量 ≤32 MiB / 2000 项，PDF ≤500 页；Go 另设进程超时。
+
+旧 `.doc`、加密 PDF、纯扫描 PDF、无正文和损坏文件返回固定错误码。空 PDF 页、图片、DOCX 页眉/页脚/脚注/文本框等未完整读取内容标记 incomplete 并返回固定 warning，不能静默视为完整 SOP；不执行 OCR。PDF 阅读顺序和复杂表格仍需人工核对，来源不适合提取时应提供完整纯文本版本。
+
+新增解析依赖于 2026-11-09 查询官方 [PyPI pypdf 元数据](https://pypi.org/pypi/pypdf/json) 与 [python-docx 元数据](https://pypi.org/pypi/python-docx/json)：稳定 pypdf 7.0.0（Python ≥3.10）和 python-docx 1.2.0（Python ≥3.9）兼容当前 3.12+。仅新增这两项及传递 lxml 6.1.3，uv.lock 固定；Bub/Republic 和已有依赖版本不变。lxml 锁文件包含 Windows x64 与 macOS Intel/Apple Silicon 的 CPython 3.12 wheel，原生下载包仍需 CI 实机验收。
+
+简化检查：继续使用原有 SDK/配置/环境预检和 Python 进程边界，不新增模型客户端、服务、插件或运行时数据库。新任务与旧总结保持独立类型，避免把跨工单建议混入 Jev；文档解析只保留确实支持的格式和可核对的位置。

@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | AGENTS.md | 文档索引 | 来源及边界 |
 | zoho-oas | 第三方 Submodule | Zoho 官方 OAS，豁免自有文件头和目录文档 |
+| knowledge.md | 知识使用说明 | 文档导入、案例积累、SOP 发布、建议来源与已知限制 |
 | downloads.md | 用户说明 | Windows/macOS 下载、双击启动、日志与更新 |
 | compatibility.md | 实现依据 | 固定版本、Skills、API/代理/并发同步与单封来信、请求计数及 Bub Schema 兼容性及 Windows/WSL/容器访问 |
 

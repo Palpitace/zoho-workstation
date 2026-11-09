@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 查询与受保护恢复操作、自动退避/失败时间和本次启动状态、独立分析状态。
+// output: 本机查询、受保护的知识/恢复操作、共享 Bub 运行状态及独立分析结果。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -175,6 +175,7 @@ func (a *App) Handler() http.Handler {
 		}
 		c.Next()
 	})
+	a.knowledgeRoutes(router)
 	router.GET("/api/status", a.status)
 	router.GET("/api/tickets", a.listTickets)
 
@@ -310,7 +311,7 @@ func (a *App) status(c *gin.Context) {
 		}
 	}
 	a.mu.Lock()
-	runtime := gin.H{"sync_start_time": a.cfg.SyncStartTime.Format(time.RFC3339), "next_sync_at": a.nextSync.UTC().Format(time.RFC3339), "last_sync_batch": a.lastSyncResult, "stopped_count": stoppedCount, "started_at": a.startedAt, "recovery_pending": map[string]int{"bub": len(a.recovery["bub"]), "jev": len(a.recovery["jev"])}, "sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"], "automatic": a.started && !a.closed, "ai_scope": "all_synced", "ai_scope_count": eligibleCount, "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"]}}
+	runtime := gin.H{"sync_start_time": a.cfg.SyncStartTime.Format(time.RFC3339), "next_sync_at": a.nextSync.UTC().Format(time.RFC3339), "last_sync_batch": a.lastSyncResult, "stopped_count": stoppedCount, "started_at": a.startedAt, "recovery_pending": map[string]int{"bub": len(a.recovery["bub"]), "jev": len(a.recovery["jev"])}, "sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"] || a.busy["case"] || a.busy["advice"], "case_running": a.busy["case"], "advice_running": a.busy["advice"], "automatic": a.started && !a.closed, "ai_scope": "all_synced", "ai_scope_count": eligibleCount, "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"], "case": a.lastError["case"], "advice": a.lastError["advice"]}}
 	a.mu.Unlock()
 	c.JSON(200, gin.H{"retry_candidates": candidates, "sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round}})
 }
@@ -322,7 +323,7 @@ func operationResponse(c *gin.Context, err error) {
 		c.JSON(202, gin.H{"status": "accepted"})
 	case errors.Is(err, errStaleRecovery):
 		apiError(c, 409, err.Error())
-	case errors.Is(err, errAwaitingBub):
+	case errors.Is(err, errAwaitingBub), errors.Is(err, errNoKnowledge):
 		apiError(c, 409, err.Error())
 	case errors.Is(err, store.ErrBusy):
 		apiError(c, 409, "operation already running")

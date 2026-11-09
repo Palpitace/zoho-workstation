@@ -57,6 +57,9 @@ def main():
         if route.request.method == "POST":
             state["posts"].append(route.request.post_data_json)
             route.fulfill(json={"status": "accepted"}, status=202)
+        elif path.endswith("/knowledge"):
+            empty = {"current": None, "success": None, "stale": False}
+            route.fulfill(json={"case": empty, "advice": empty, "enabled": False, "busy": False})
         elif path == "/api/status":
             route.fulfill(json=status)
         elif path == "/api/tickets":

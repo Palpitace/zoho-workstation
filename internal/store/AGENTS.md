@@ -1,6 +1,6 @@
 一旦我所属的文件夹有所变化请更新我。
 
-负责 Go 独占的 SQLite 访问、工单/发现游标/调用计数及同库操作锁。
+负责 Go 独占的 SQLite 访问、工单/知识版本/发现游标/调用计数及同库操作锁。
 保存原始证据、规范化快照与分析状态，向编排及查询 API 提供数据。
 不发网络请求、不创建通知或通用任务队列。
 
@@ -11,6 +11,8 @@
 | store_test.go | 集成测试 | 重启/迁移保留快照和预算、重复保存及部门边界 |
 | lock_unix.go | 平台锁 | Linux/macOS 非阻塞 Flock |
 | lock_windows.go | 平台锁 | Windows 非阻塞 LockFileEx |
+| knowledge.go | 知识存储 | 幂等案例、SOP 草稿/发布/停用、不可变来源与检索 |
+| knowledge_test.go | 知识集成验证 | 发布隔离、版本竞争、重启、来源有效性及机型边界 |
 | analysis.go | 分析记录 | 输入版本、本地校验失败、成功结果与调用计数 |
 | retry_test.go | 持续重试验证 | 持久冷却、无累计上限、重启和输入隔离 |
 | analysis_test.go | AI 存储测试 | 版本隔离、invalid 不计费、恢复、不限额计数及操作锁 |
@@ -46,3 +48,15 @@ Analysis 在原有历史扫描中计算当前签名的失败次数与最近失�
 用户取消 Jev/Bub 累计失败上限。StartAnalysis 在同签名 running/success/invalid 时仍去重；普通失败按持久 completed_at 和失败次数计算 1、2、4、8、16、30 分钟冷却，之后每 30 分钟继续，重启不清零。Analysis 返回 next_retry_at，不再返回 retry_exhausted；有当前成功缓存的手动失败不重复自动调用。手动 force 可提前重试但不能重叠。retry_test.go 以合成数据库时间前移验证超过两次后继续、退避上限和重启/新输入隔离。
 
 Issue #5：List 移除固定 LIMIT 50，Reserve 移除冻结及累计上限。新增 sync_state.discovery_cycle/start/offset/done 为幂等非破坏性列迁移；SaveDiscovery 原子保存已校验的页ID和分页位置，不删除工单或AI历史。State 公开发现位置/完成标记以及完整有效数量complete、停止数量stopped，ready仍为已保存快照总数。创建日期与部门验证在Zoho层完成，存储仅负责原子性。新增周期重扫、失败不推进以及60张跨重启验证在syncer公开集成测试覆盖，不另重复实现数据库专用测试套件。
+
+## 知识来源与发布
+
+knowledge_entries 通过独立 CREATE TABLE/INDEX 做增量初始化，不修改已有工单或 AI 历史。内容不可就地修改；同类/同工单/同 SourceHash 幂等返回原条目，已停用条目不会因为重复导入复活。案例只从完整且未停止的工单保存，可自动发布，保存新版本后旧案例归档。SourceHash 由 app 对照当前案例输入，存储查询仅校验工单仍完整且未停止。
+
+SOP 导入始终为 draft，只有 PublishKnowledge 显式操作生效。ReplacesID 指定旧版，草稿期间不影响旧版；发布事务原子归档旧版并发布新版，同源兄弟草稿随后发布会返回 ErrKnowledgeConflict，防止旧审阅覆盖已生效修订。ArchiveKnowledge 仅停用不删除，历史及引用仍可查看。
+
+检索先筛选 published 和当前有效案例，再按机型及英文/中文词面匹配。Source 返回稳定条目/块定位和原工单消息 ID；无相关证据时不回填任意条目。每块限 16 KiB、每份资料 512 KiB、256 块，超限显式拒绝不截断，检索进一步限制返回总量。词面检索不保证跨语言召回。数据库仅 Go 读写，上传原文件由 app 保存在忽略的 data/knowledge 下。
+
+简化检查：只新增一张正在使用的知识版本表；不增加向量服务、发布队列、抽象仓储或重复全文副本。版本发布与查询由现有 SQLite 事务及 Go 词面排序完成。
+
+知识派生 SOP 可保留 source_ticket_id/message_ids 以回到原案例证据，人工发布后独立生效。来源签名由 app 包含当前输入/Schema/模型及案例内容；存储不把调用 ID 当成知识版本。知识块最多 4096 个，总文本仍有界。ai_runs 的 kind 允许 case/advice，复用原缓存、重试和重启恢复，所有真实请求继续计入持久计数。

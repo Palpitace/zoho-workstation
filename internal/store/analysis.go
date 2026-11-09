@@ -1,5 +1,5 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 按输入版本的分析记录、持续退避/最近失败信息、成功结果保留和持久调用计数。
+// output: 总结/评估/案例/建议的版本记录、持续退避、成功结果保留和持久调用计数。
 // pos: SQLite AI 结果与调用计数边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -52,7 +52,7 @@ func (s *Store) RecordAnalysisFailure(ctx context.Context, req AnalysisRequest, 
 	if failure == nil {
 		return errors.New("local analysis failure is required")
 	}
-	if (req.Kind != "jev" && req.Kind != "bub") || req.InputHash == "" || req.SchemaVersion == "" || req.RequestedModel == "" || req.Round == "" {
+	if (req.Kind != "jev" && req.Kind != "bub" && req.Kind != "case" && req.Kind != "advice") || req.InputHash == "" || req.SchemaVersion == "" || req.RequestedModel == "" || req.Round == "" {
 		return errors.New("analysis metadata incomplete")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -67,7 +67,7 @@ func (s *Store) RecordAnalysisFailure(ctx context.Context, req AnalysisRequest, 
 // Interrupted attempts remain counted; per-input dedup and retry guards still apply.
 func (s *Store) StartAnalysis(ctx context.Context, req AnalysisRequest, force bool) (AnalysisRun, bool, error) {
 	run := AnalysisRun{AnalysisRequest: req, Status: "running", StartedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	if (req.Kind != "jev" && req.Kind != "bub") || req.InputHash == "" || req.SchemaVersion == "" || req.RequestedModel == "" || req.Round == "" {
+	if (req.Kind != "jev" && req.Kind != "bub" && req.Kind != "case" && req.Kind != "advice") || req.InputHash == "" || req.SchemaVersion == "" || req.RequestedModel == "" || req.Round == "" {
 		return run, false, errors.New("analysis metadata incomplete")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)

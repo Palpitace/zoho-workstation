@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 有界同步及 Bub→Jev 调度、显式确认的一次恢复；环境故障在计数前阻断 Bub。
+// output: 有界同步、共享 Bub 槽轮转总结/案例/建议、独立 Jev 与持久恢复；环境故障先阻断。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -33,6 +33,7 @@ type App struct {
 	busy            map[string]bool
 	lastError       map[string]string
 	analysisWake    chan struct{}
+	bubNext         int
 	recovery        map[string]map[string]int64
 	startedAt       string
 	nextSync        time.Time
@@ -220,6 +221,10 @@ func (a *App) model(kind string) (config.Model, string, error) {
 		return a.cfg.Jev, analysis.JevSchema, nil
 	case "bub":
 		return a.cfg.Bub, analysis.BubSchema, nil
+	case "case":
+		return a.cfg.Bub, analysis.CaseSchema, nil
+	case "advice":
+		return a.cfg.Bub, analysis.AdviceSchema, nil
 	default:
 		return config.Model{}, "", errors.New("unknown analysis capability")
 	}
@@ -231,14 +236,32 @@ func (a *App) scheduleAnalysis() {
 		a.setError("analysis", err)
 		return
 	}
-	for _, kind := range []string{"bub", "jev"} {
+	// Rotate the shared Bub slot so a busy summary backlog cannot starve knowledge.
+	a.mu.Lock()
+	next := a.bubNext
+	a.mu.Unlock()
+	bubKinds := []string{"bub", "case", "advice"}
+	kinds := []string{"jev"}
+	for i := range bubKinds {
+		kinds = append(kinds, bubKinds[(next+i)%len(bubKinds)])
+	}
+	pythonChecked := false
+	var pythonErr error
+	for _, kind := range kinds {
 		model, _, _ := a.model(kind)
 		if !model.Enabled {
 			continue
 		}
-		if kind == "bub" {
-			if err := analysis.CheckPython(a.ctx); err != nil {
-				a.setError(kind, errors.Join(errPythonUnavailable, err))
+		if kind != "jev" {
+			if kind != "bub" && analysis.CheckKnowledge() != nil {
+				continue
+			}
+			if !pythonChecked {
+				pythonErr = analysis.CheckPython(a.ctx)
+				pythonChecked = true
+			}
+			if pythonErr != nil {
+				a.setError(kind, errors.Join(errPythonUnavailable, pythonErr))
 				continue
 			}
 		}
@@ -264,7 +287,12 @@ func (a *App) scheduleAnalysis() {
 }
 
 func (a *App) RequestAnalysis(id, kind string) error {
-	if kind == "bub" && a.cfg.Bub.Enabled {
+	if kind != "jev" && a.cfg.Bub.Enabled {
+		if kind != "bub" {
+			if err := analysis.CheckKnowledge(); err != nil {
+				return err
+			}
+		}
 		a.mu.Lock()
 		ctx := a.ctx
 		a.mu.Unlock()
@@ -291,7 +319,7 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	if !a.started || a.closed {
 		return false, errors.New("service is stopping")
 	}
-	if a.busy[kind] {
+	if a.busy[kind] || (kind != "jev" && (a.busy["bub"] || a.busy["case"] || a.busy["advice"])) {
 		return false, store.ErrBusy
 	}
 	req, input, prepareErr := analysisRequest(a.ctx, a.db, a.cfg, id, kind, DevelopmentRound)
@@ -301,7 +329,7 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	if prepareErr != nil {
 		delete(a.recovery[kind], id)
 	}
-	if errors.Is(prepareErr, errAwaitingBub) {
+	if errors.Is(prepareErr, errAwaitingBub) || errors.Is(prepareErr, errNoKnowledge) {
 		if force {
 			return false, prepareErr
 		}
@@ -314,6 +342,15 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 			}
 		}
 		return false, prepareErr
+	}
+	if kind == "case" && !force {
+		view, err := a.db.Analysis(a.ctx, req)
+		if err != nil {
+			return false, err
+		}
+		if view.Success != nil && !view.Stale {
+			return false, a.saveCase(a.ctx, req, view.Success.Result)
+		}
 	}
 	// A confirmation names a specific failed run, not future versions of a ticket.
 	if runID, queued := a.recovery[kind][id]; queued {
@@ -339,6 +376,13 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 		return false, err
 	}
 	a.busy[kind] = true
+	if kind != "jev" {
+		for i, k := range []string{"bub", "case", "advice"} {
+			if k == kind {
+				a.bubNext = (i + 1) % 3
+			}
+		}
+	}
 	a.lastError[kind] = ""
 	a.wg.Add(1)
 	go func() {
@@ -349,12 +393,17 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 		var callErr error
 		if kind == "jev" {
 			output, returned, callErr = analysis.Jev(ctx, nil, model, input)
-		} else {
+		} else if kind == "bub" {
 			output, returned, callErr = analysis.Bub(ctx, model, input)
+		} else {
+			output, returned, callErr = analysis.Knowledge(ctx, model, kind, input)
 		}
 		cancel()
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(a.ctx), 3*time.Second)
 		saveErr := a.db.FinishAnalysis(finishCtx, run.ID, returned, output, callErr)
+		if kind == "case" && callErr == nil && saveErr == nil {
+			saveErr = a.saveCase(finishCtx, req, output)
+		}
 		finishCancel()
 		a.finish(kind, errors.Join(callErr, saveErr))
 		if err := errors.Join(callErr, saveErr); err != nil {

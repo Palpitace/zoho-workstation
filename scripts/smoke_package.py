@@ -1,5 +1,5 @@
 # input: 自有构建产物归档，不读取用户凭据。
-# output: 异地解压后 Python/SDK、真实代理 transport、Go/SQLite/锁与安全日志的离线验证。
+# output: 异地解压后 SDK/知识/文档入口、代理 transport、Go/SQLite/锁与日志的离线验证。
 # pos: 下载包验收边界，供三个原生 CI 平台调用。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import hashlib
 import json
@@ -23,6 +23,11 @@ with tempfile.TemporaryDirectory(prefix="workstation portable space ") as tempor
     env = {**os.environ, "PYTHONPATH": str(root / "python/packages"), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
     # No SDK request: actual imports and JSON contract validation exercise native wheels.
     subprocess.run([str(python), "-c", "import sys; sys.path.insert(0, 'python'); import main; main.Snapshot.model_validate({'conversation_hash':'synthetic','messages':[]}); print('bundled SDK import: PASS')"], cwd=root, env=env, check=True)
+    # Exercise the new fixed entries in the relocated bundled environment; no model calls.
+    document = {"filename": "synthetic.md", "content_base64": "IyBTeW50aGV0aWMgU09QXG5DaGVjayBtZWRpYS4="}
+    parsed = subprocess.run([str(python), "python/documents.py"], input=json.dumps(document), text=True, capture_output=True, cwd=root, env=env, check=True)
+    assert json.loads(parsed.stdout)["ok"] and json.loads(parsed.stdout)["blocks"]
+    subprocess.run([str(python), "-c", "import sys; sys.path.insert(0, 'python'); import knowledge; knowledge.Advice.model_validate({'steps':[], 'missing_information':[], 'conflicts':[]}, context={'input': knowledge.Input.model_validate({'ticket': {'conversation_hash':'synthetic','messages':[]},'summary':{}})}); print('bundled knowledge and document entry: PASS')"], cwd=root, env=env, check=True)
     if sys.platform == "darwin":
         for library in (root / "python/packages").rglob("*"):
             if library.suffix not in (".so", ".dylib"):

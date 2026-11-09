@@ -66,3 +66,5 @@ Bub 增量的设计简化检查：共用 AnalysisRun/AnalysisView 元数据类�
 Bub 增量已通过同一合成浏览器主链路：建议/客户确认执行/执行未知、客户报告结果/结果未知、模型建议/待验证假设、失败保留成功及过期标记、无结果待总结、失败无成功结果、旧消息引用缺失，以及引用点击后滚动并聚焦且 hash 路由不变。补充验证筛选列表不含目标票时，详情仍显示自身同步错误。桌面与窄屏无溢出，最终 `pnpm check` 为 0 错误 0 警告，`pnpm build` 与文档结构检查通过。未调用真实模型或读取真实工单。
 
 2026-11-05 在固定 shadcn-svelte 1.8.0 CLI/Vega 基础上增加 Combobox 所需 command、popover、input-group 子集，保留既有 button/input。CLI 按当前 release-age 策略解析的稳定兼容 Bits UI 2.20.4 与 peer @internationalized/date 3.12.4 均改为精确锁定；未升级既有依赖。官方 Combobox 是 Popover+Command 组合。删除本期未使用的 Dialog、Textarea、Command 其他扩展与导出，相关类型/构建重新验证。
+
+知识增量：侧栏增加知识库，提供本地文档导入、解析正文预览、SOP 草稿修订/显式发布和停用。详情增加独立“参考排查建议”，引用知识版本及当前消息，失败不影响事实总结或评估；过期建议隐藏处理步骤并提示更新。延续 Tailwind/shadcn、系统字体及无多余动画的内部工具布局，不新增前端依赖。
