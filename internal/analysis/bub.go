@@ -1,5 +1,5 @@
 // input: 完整脱敏会话、显式配置、固定 Python 环境和代理白名单。
-// output: 白名单HTTP诊断、整单汇总校验及安全环境/模型错误。
+// output: v7 公开客服引用复核、整单汇总及安全模型诊断。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -19,7 +19,7 @@ import (
 	"zoho-workstation/internal/config"
 )
 
-const BubSchema = "bub-summary-v6"
+const BubSchema = "bub-summary-v7"
 
 type fact struct {
 	Text       string   `json:"text"`
@@ -79,15 +79,14 @@ func ValidateBub(result, input json.RawMessage) error {
 				}
 				return errors.New("Bub fact lacks valid evidence")
 			}
-			customer, support := false, false
+			customer := false
 			for _, id := range item.MessageIDs {
 				message, ok := messages[id]
 				if !ok {
 					return errors.New("Bub fact references unknown message")
 				}
 				customer = customer || message.Role == "customer" || message.MixedAuthors
-				support = support || message.Role == "agent" || message.MixedAuthors
-				if section == 2 && (message.Visibility == "private" || strings.EqualFold(message.Status, "DRAFT") || strings.EqualFold(message.Status, "FAILED") || strings.EqualFold(message.Status, "PENDING")) {
+				if section == 2 && (message.Role != "agent" || message.Source == "comment" || message.Visibility != "public" || strings.EqualFold(message.Status, "DRAFT") || strings.EqualFold(message.Status, "FAILED") || strings.EqualFold(message.Status, "PENDING")) {
 					return errors.New("Bub support response cites an internal or unsent message")
 				}
 			}
@@ -96,9 +95,6 @@ func ValidateBub(result, input json.RawMessage) error {
 				if len(item.MessageIDs) != 1 || m.Role != "unknown" || m.Source != "thread" || m.Direction != "in" || m.Visibility != "public" || m.Status != "SUCCESS" || !strings.Contains(m.Body, text) {
 					return errors.New("Bub feedback lacks customer evidence or a verbatim incoming quote")
 				}
-			}
-			if section == 2 && !support {
-				return errors.New("Bub response lacks support evidence")
 			}
 		}
 	}

@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 滚动范围配置、统一逐票任务状态、Bub积压/活动诊断及受保护的本机查询操作。
+// output: 列表/详情统一重试停止状态、Bub积压诊断与受保护本机查询。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -19,6 +19,7 @@ import (
 )
 
 type AIStatus struct {
+	RetryBlocked       bool   `json:"retry_blocked,omitempty"`
 	TaskState          string `json:"task_state"`
 	Attempts           int    `json:"attempts"`
 	Status             string `json:"status"`
@@ -105,7 +106,7 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 		if waiting {
 			views[kind] = analysisView{AnalysisView: view, WaitingFor: "bub"}
 		}
-		s := AIStatus{Status: "pending", Stale: view.Stale, AutomaticEligible: a.automaticallyEligible(record), NextRetryAt: view.NextRetryAt, LastFailedAt: view.LastFailedAt, FailureBeforeStart: historical}
+		s := AIStatus{RetryBlocked: view.RetryBlocked, Status: "pending", Stale: view.Stale, AutomaticEligible: a.automaticallyEligible(record), NextRetryAt: view.NextRetryAt, LastFailedAt: view.LastFailedAt, FailureBeforeStart: historical}
 		if view.Current != nil {
 			s.Status = view.Current.Status
 			s.Error = view.Current.Error
@@ -139,7 +140,9 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 	}
 	if summaries["jev"].Status == "waiting" {
 		reason := "等待当前会话的 Bub 总结完成"
-		if summaries["bub"].NextRetryAt != "" {
+		if summaries["bub"].RetryBlocked {
+			reason = "Bub 连续证据校验失败，需核对会话后手动重新总结"
+		} else if summaries["bub"].NextRetryAt != "" {
 			reason = "Bub 总结失败，正在等待自动重试"
 		} else if summaries["bub"].Status == "failed" {
 			reason = "Bub 总结失败，等待总结恢复"

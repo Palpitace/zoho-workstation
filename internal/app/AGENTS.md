@@ -101,3 +101,5 @@ GET `/api/tickets/:id/knowledge` 独立返回 case/advice 状态和来源快照�
 滚动测试版在 New 时启用存储范围，首次选取前不调度旧工单；列表/统计/自动Bub、Jev、案例和建议仅使用当前50张。手动分析和案例保存再次读取 OutsideScope，防止旧列表或已退出范围的任务派生新操作。范围切换前已发出的请求允许结束，历史结果保留。状态API返回 sync_recent_limit。
 
 Issue #10：首次远端范围未确认时仅展示本地最新50张缓存，自动资格及手动请求仍检查 OutsideScope。同步批次日志新增 stage/outcome，明确失败与no_changes；不把0处理量当成功。
+
+Issue #11：recordViews将retry_blocked同步到列表和详情，状态页任务reason说明连续3次相同证据错误停止；Jev没有可用总结时明确等待人工恢复Bub。原有手动单票/批量操作可显式重试一次，自动调度遵守存储停止规则。CustomerOnlySummary集成用合成Python输出和本地Jev服务证明只有客户来信也能自动完成总结→评估；不会调用真实服务。

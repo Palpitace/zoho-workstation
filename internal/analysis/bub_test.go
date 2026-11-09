@@ -1,5 +1,5 @@
 // input: 合成 Bub JSON、固定消息引用、隔离子进程及本地模拟代理。
-// output: HTTP诊断白名单、引用约束、代理继承与凭据隔离证据。
+// output: 公开客服证据边界、HTTP诊断、代理继承与凭据隔离证据。
 // pos: Python 输出进入 Go 的验证边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis_test
 
@@ -209,6 +209,21 @@ func TestBubAndKnowledgeRetainSafeHTTPDiagnostics(t *testing.T) {
 			if id == "req-safe-123" && !strings.Contains(err.Error(), id) {
 				t.Fatal("request id missing")
 			}
+		}
+	}
+}
+
+func TestSupportEvidenceRejectsCustomerNotesAndUnsent(t *testing.T) {
+	for _, bad := range []string{
+		`{"id":"x","role":"customer","visibility":"public","mixed_authors":true}`,
+		`{"id":"x","role":"agent","visibility":"public","source":"comment"}`,
+		`{"id":"x","role":"agent","visibility":"unknown"}`,
+		`{"id":"x","role":"agent","visibility":"public","status":"FAILED"}`,
+	} {
+		input := json.RawMessage(`{"messages":[{"id":"a","role":"agent","visibility":"public"},` + bad + `]}`)
+		result := json.RawMessage(`{"device_info":[],"customer_feedback":[],"support_responses":[{"text":"Support replied","message_ids":["a","x"]}]}`)
+		if err := analysis.ValidateBub(result, input); err == nil {
+			t.Fatal("non-support reference accepted")
 		}
 	}
 }

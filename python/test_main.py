@@ -1,5 +1,5 @@
 # input: 合成会话、模型结果、SDK 模拟错误及隔离代理/缺依赖环境。
-# output: 429/HTTP/格式异常区分、敏感内容隔离和总结引用契约证据。
+# output: 无客服回复的反馈保留、角色证据、SDK诊断与凭据隔离回归。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -22,6 +22,19 @@ from main import Snapshot, validate_summary, validation_diagnostics
 
 
 class SummaryContractTest(unittest.TestCase):
+    def test_no_sent_support_keeps_customer_feedback(self):
+        customer = {"id": "c", "role": "customer", "body": "Cannot print", "visibility": "public", "source": "thread", "status": "SUCCESS"}
+        for extra in ([], [{**customer, "id": "x", "mixed_authors": True}],
+                      [{"id": "x", "role": "agent", "body": "internal", "visibility": "private"}],
+                      [{"id": "x", "role": "agent", "body": "note", "visibility": "public", "source": "comment"}],
+                      *[[{"id": "x", "role": "agent", "body": "unsent", "visibility": "public", "status": status}] for status in ("DRAFT", "FAILED", "PENDING")]):
+            snapshot = Snapshot.model_validate({"conversation_hash": "synthetic", "messages": [customer, *extra]})
+            for unsupported in ([{"text": "Support suggested a restart", "message_ids": ["c"]}], None):
+                with self.subTest(extra=extra, unsupported=unsupported):
+                    result = validate_summary(json.dumps({"device_info": [], "customer_feedback": [{"text": "Cannot print", "message_ids": ["c"]}], "support_responses": unsupported}), snapshot)
+                    self.assertEqual(result.support_responses, [])
+                    self.assertEqual(result.customer_feedback[0].message_ids, ["c"])
+
     def test_optional_device_evidence_does_not_block_summary(self):
         snapshot = Snapshot.model_validate({"conversation_hash": "synthetic", "product": "P1", "messages": [
             {"id": "m1", "role": "customer", "body": "Labels overlap"},
@@ -77,7 +90,7 @@ class SummaryContractTest(unittest.TestCase):
             check({"ok": False, "error": "proxy_dependency_missing"})
             payload = json.dumps({"input": {"conversation_hash": "synthetic", "messages": []},
                                   "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-                                  "schema_version": "bub-summary-v6"})
+                                  "schema_version": "bub-summary-v7"})
             failure = subprocess.run([sys.executable, entry], input=payload, text=True,
                                      capture_output=True, env=env, timeout=10)
             self.assertEqual(json.loads(failure.stdout), {"ok": False, "error": "proxy_dependency_missing"})
@@ -117,7 +130,7 @@ class SummaryContractTest(unittest.TestCase):
             "input": {"conversation_hash": "synthetic",
                       "messages": [{"id": "m1", "role": "customer", "body": "Help"}]},
             "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-            "schema_version": "bub-summary-v6",
+            "schema_version": "bub-summary-v7",
         }).encode()
         original = main.republic.get_model
         for error, expected in (
@@ -262,7 +275,7 @@ class SummaryContractTest(unittest.TestCase):
                             "messages": [{"id": "m1", "role": "customer", "body": "Help"}],
                         },
                         "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
-                        "schema_version": "bub-summary-v6",
+                        "schema_version": "bub-summary-v7",
                     })
                     with patch.object(main.republic, "get_model", side_effect=configured):
                         result = await main.summarize(request)
@@ -319,7 +332,7 @@ class SummaryContractTest(unittest.TestCase):
                 request = main.Request.model_validate({
                     "input": source,
                     "config": {"api_base": "https://api.deepseek.com", "api_key": "synthetic-key", "model": "deepseek:synthetic"},
-                    "schema_version": "bub-summary-v6",
+                    "schema_version": "bub-summary-v7",
                 })
                 async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond), trust_env=False) as client:
                     def configured(*args, **kwargs):

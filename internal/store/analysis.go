@@ -1,5 +1,5 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 版本历史、持久尝试次数、统一任务状态与持续退避。
+// output: 版本历史、持续网络退避及同签名连续证据失败的人工处理状态。
 // pos: SQLite AI 结果与调用计数边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -29,6 +30,7 @@ type AnalysisRun struct {
 	Error         string          `json:"error,omitempty"`
 }
 type AnalysisView struct {
+	RetryBlocked bool         `json:"retry_blocked,omitempty"`
 	Active       *AnalysisRun `json:"-"`
 	TaskState    string       `json:"task_state"`
 	Attempts     int          `json:"attempts"`
@@ -87,6 +89,29 @@ func (s *Store) StartAnalysis(ctx context.Context, req AnalysisRequest, force bo
 	if running > 0 || (!force && (success > 0 || time.Now().Before(retryTime(lastFailure, failures)) || invalid > 0)) {
 		return run, false, nil
 	}
+	if req.Kind == "bub" && !force {
+		rows, e := tx.QueryContext(ctx, `SELECT status,error FROM ai_runs WHERE ticket_id=? AND kind=? AND input_hash=? AND schema_version=? AND requested_model=? ORDER BY id DESC LIMIT 3`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel)
+		if e != nil {
+			return run, false, e
+		}
+		recent := []AnalysisRun{}
+		for rows.Next() {
+			var r AnalysisRun
+			if e = rows.Scan(&r.Status, &r.Error); e != nil {
+				rows.Close()
+				return run, false, e
+			}
+			recent = append(recent, r)
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return run, false, e
+		}
+		if evidenceRetryBlocked(req.Kind, recent) {
+			return run, false, nil
+		}
+	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO ai_runs(ticket_id,kind,input_hash,schema_version,requested_model,round,status,started_at) VALUES(?,?,?,?,?,?,'running',?)`, req.TicketID, req.Kind, req.InputHash, req.SchemaVersion, req.RequestedModel, req.Round, run.StartedAt)
 	if err != nil {
 		return run, false, err
@@ -129,6 +154,7 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 	}
 	defer rows.Close()
 	var view AnalysisView
+	recent := []AnalysisRun{}
 	failures := 0
 	for rows.Next() {
 		r := AnalysisRun{AnalysisRequest: AnalysisRequest{TicketID: req.TicketID, Kind: req.Kind}}
@@ -142,6 +168,9 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 			view.Active = &copy
 		}
 		matches := r.InputHash == req.InputHash && r.SchemaVersion == req.SchemaVersion && r.RequestedModel == req.RequestedModel
+		if matches && len(recent) < 3 {
+			recent = append(recent, r)
+		}
 		if matches && r.Status != "invalid" {
 			view.Attempts++
 		}
@@ -161,7 +190,8 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 			view.Stale = !matches
 		}
 	}
-	if view.Current != nil && view.Current.Status == "failed" && (view.Success == nil || view.Stale) {
+	view.RetryBlocked = evidenceRetryBlocked(req.Kind, recent)
+	if view.Current != nil && view.Current.Status == "failed" && !view.RetryBlocked && (view.Success == nil || view.Stale) {
 		view.NextRetryAt = retryTime(view.LastFailedAt, failures).Format(time.RFC3339Nano)
 	}
 	view.TaskState = "pending"
@@ -175,6 +205,10 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 		case "invalid":
 			view.TaskState = "manual"
 		case "failed":
+			if view.RetryBlocked {
+				view.TaskState = "manual"
+				break
+			}
 			if at, e := time.Parse(time.RFC3339Nano, view.NextRetryAt); e == nil && time.Now().Before(at) {
 				view.TaskState = "retry_waiting"
 			}
@@ -194,4 +228,43 @@ func retryTime(completed string, failures int) time.Time {
 	}
 	delay := time.Minute * time.Duration(1<<min(failures-1, 5))
 	return at.Add(min(delay, 30*time.Minute))
+}
+
+// Evidence stops are per input/schema/model, not a request quota. A success or a
+// different failure breaks the consecutive streak; explicit force remains available.
+func evidenceRetryBlocked(kind string, recent []AnalysisRun) bool {
+	if kind != "bub" || len(recent) < 3 {
+		return false
+	}
+	code := bubEvidenceFailure(recent[0].Error)
+	if code == "" {
+		return false
+	}
+	for _, r := range recent[:3] {
+		if r.Status != "failed" || bubEvidenceFailure(r.Error) != code {
+			return false
+		}
+	}
+	return true
+}
+
+func bubEvidenceFailure(message string) string {
+	if strings.HasPrefix(message, "Bub: invalid_summary") {
+		for _, code := range []string{"unknown_reference", "missing_reference", "missing_customer_evidence", "missing_support_evidence"} {
+			if strings.Contains(message, "("+code+")") {
+				return code
+			}
+		}
+	}
+	switch message {
+	case "Bub fact references unknown message":
+		return "unknown_reference"
+	case "Bub fact lacks valid evidence":
+		return "missing_reference"
+	case "Bub response lacks support evidence", "Bub support response cites an internal or unsent message":
+		return "missing_support_evidence"
+	case "Bub feedback lacks customer evidence or a verbatim incoming quote":
+		return "missing_customer_evidence"
+	}
+	return ""
 }

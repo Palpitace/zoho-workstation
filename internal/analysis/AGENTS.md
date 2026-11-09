@@ -14,7 +14,7 @@
 | input_test.go | 行为测试 | 保留否定事实、会话不变、无反向参考和脱敏 |
 | jev.go | TypeSafe 接口 | 单次 14 个独立 Choice 问题、枚举校验及安全错误 |
 | jev_test.go | 协议测试 | 正常、未知、非法枚举及失败响应 |
-| bub.go | Python 边界 | 固定入口、最小代理环境、安全错误分类及 v6 三类事实/来源二次校验 |
+| bub.go | Python 边界 | 固定入口、最小代理环境、安全错误分类及 v7 三类事实/来源二次校验 |
 | bub_test.go | 摘要契约测试 | 可空分类/角色来源校验、真实子进程模拟代理与凭据环境隔离 |
 
 Bub 使用 PythonExecutable 选择固定本地解释器与 python/main.py，无 Shell 拼接。stdin 仅传完整脱敏会话、Bub 专用模型配置及 Schema；子进程环境保留固定 PATH/编码/不写缓存，并仅按名称继承非空 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 及其小写形式，不继承 Zoho/Jev/Bub Key 或其他父进程变量。代理值可能含认证信息，禁止日志输出；大小写优先级和 NO_PROXY 行为由锁定的 SDK HTTP 客户端处理。90 秒上限、stdout 1 MiB 上限、stderr 不回显；失败不清已有结果。连接失败、超时分别透传固定 model_connection_failed、model_timeout；上游错误分为 model_rate_limited、model_http_error、model_response_invalid（旧 model_upstream_failed 兼容读取），不输出异常原文。结构校验能拒绝未知引用、错角色或未发客服消息，不能证明模型自由文本事实正确。
@@ -25,7 +25,7 @@ Jev Schema 为 jev-assessment-v2。使用官方 POST systemone 的 model/state/q
 
 Bub 先总结完整脱敏会话，Jev 后评估当前总结。会话 Hash 包含消息事实、角色、可见性、发送状态、时间及附件元数据，排除工单状态/优先级/编辑时间和部门。超过 512 KiB 拒绝发送，不静默截断。自动脱敏有局限，沿用 ticket/AGENTS.md；真实输入保存在 data/ 私有文件。
 
-Bub Schema 为 bub-summary-v6，额外包含 conversation_hash，不再包含 jev_reference。Jev SummaryInput 只发送当前总结及其输入 Hash、会话版本、Schema/模型信息；不发送原始消息，也不因运行 ID 改变而失效。总结内容变化更新 Hash；选择当前成功总结由 app 负责。Jev v2 Prompt 明确模型总结非原始事实，未知不可用总结中性措辞补齐，客服建议不等于客户执行。旧结果保留但过期，不迁移或改写。
+Bub Schema 为 bub-summary-v7，额外包含 conversation_hash，不再包含 jev_reference。Jev SummaryInput 只发送当前总结及其输入 Hash、会话版本、Schema/模型信息；不发送原始消息，也不因运行 ID 改变而失效。总结内容变化更新 Hash；选择当前成功总结由 app 负责。Jev v2 Prompt 明确模型总结非原始事实，未知不可用总结中性措辞补齐，客服建议不等于客户执行。旧结果保留但过期，不迁移或改写。
 输入超限仍返回对应 Hash 以保存本地失败版本，但不返回可发送正文；本地失败不计为模型调用。
 
 用户指定的新输出固定为 device_info、customer_feedback、support_responses 三个数组，设备最多 10 项、客户反馈和客服回复各最多 1 项，每项 `{text,message_ids}`。无依据则空数组，不填占位语，不再生成强制当前情况、卡点或下一步建议。Python Prompt 明确建议不等于执行，客户的执行/实际结果归入反馈并引用客户发言；客服分类只描述已经回复或给予的排查，不推断客户已照做。
@@ -52,7 +52,7 @@ Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索�
 
 ## 知识与建议（2026-11-09）
 
-`bub-case-v1` / `bub-advice-v1` 通过 python/knowledge.py 独立执行，复用受限解释器环境、90 秒超时和有界 stdout；不修改 bub-summary-v6 或 Jev 输入。Case 使用完整脱敏会话与当前总结，支持仅客户来信、无客服步骤；操作必须有公开已发客服证据，确认执行/效果需要非混合客户证据。型号必须能在工单产品或引用消息中逐字找到，否则不能用于机型匹配。结构和角色检查无法证明模型语义全部正确。
+`bub-case-v1` / `bub-advice-v1` 通过 python/knowledge.py 独立执行，复用受限解释器环境、90 秒超时和有界 stdout；不修改 bub-summary-v7 或 Jev 输入。Case 使用完整脱敏会话与当前总结，支持仅客户来信、无客服步骤；操作必须有公开已发客服证据，确认执行/效果需要非混合客户证据。型号必须能在工单产品或引用消息中逐字找到，否则不能用于机型匹配。结构和角色检查无法证明模型语义全部正确。
 建议至多三项，每项引用 Go 提供的 source_id 和可选当前 message_id；来源快照与结果共同保存。未知来源、内部/未发消息引用被拒绝；未检索到有效来源由 app 等待，不发送付费请求。模型不能获得数据库、文件或网络工具。
 文档使用 documents.py 本地解析，未发布前不发送模型。单文件 10 MiB、正文 256 KiB、每块 8 KiB、最多 4096 块；PDF 页和 DOCX 段落/表格及 Markdown 行位置保留。扫描页、图像或无法提取的内容显式拒绝，不做 OCR。原件由 app 私有保存，提取内容再脱敏。详情见 [知识使用说明](../../docs/knowledge.md)。
 
@@ -63,3 +63,5 @@ Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索�
 Issue #9：model_rate_limited（429）、model_http_error 与 model_response_invalid 分开透传。HTTP状态限定100–599，请求ID限定96字符字母数字下划线短横线；不读取异常正文和任意响应头。错误文本可由store持久保存，结构化日志取同一安全字段。旧 model_upstream_failed 仍可读取，但不能恢复其未记录的HTTP状态。
 
 校验失败仍保留安全请求ID及原有栏目诊断；结构化日志中的error_category保持固定类别。诊断字符白名单只允许已知路径，不记录模型原文。
+
+Issue #11：BubSchema v7版本化客服证据规则，Python先纠正源会话完全没有客服回复的空段；Go继续严格拒绝客户/备注/私密/草稿/失败/待发送引用，不默默接受未经Python校验的回复。删除已被逐条检查覆盖的any-support重复条件；未改变Jev协议或供应商。

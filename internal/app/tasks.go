@@ -1,5 +1,5 @@
 // input: 当前工单版本、持久分析历史和已有调度开关。
-// output: 列表/详情共用任务状态与 Bub 分类型积压、活动工单及失败记录。
+// output: 活动/积压/重试与连续证据失败停止的统一任务状态。
 // pos: 只读任务展示派生，不创建第二套队列。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -53,6 +53,9 @@ func (a *App) taskState(record store.Record, kind string, view analysisView) str
 
 func taskFor(record store.Record, kind string, view analysisView) taskItem {
 	item := taskItem{TicketID: record.ID, TicketNumber: displayTicket(record, nil).TicketNumber, Kind: kind, State: view.TaskState, Attempts: view.Attempts, LastFailedAt: view.LastFailedAt, NextRetryAt: view.NextRetryAt, Reason: view.WaitingReason}
+	if view.RetryBlocked {
+		item.Reason = "连续3次相同证据校验失败，已停止自动重试；核对会话后可手动重新总结。"
+	}
 	if view.Current != nil {
 		item.Error = view.Current.Error
 		if view.Current.Status == "running" {

@@ -1,5 +1,5 @@
 # input: stdin 中完整脱敏会话、最小模型配置、Schema 和允许的代理环境。
-# output: 结构化整单总结、引用诊断及无响应正文的HTTP错误分类。
+# output: v7 可选客服段纠正、严格引用及安全结构化结果/失败。
 # pos: Go 到无工具 Bub Core 的固定进程入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ class Snapshot(BaseModel):
 class Request(StrictModel):
     input: Snapshot
     config: ModelConfig
-    schema_version: Literal["bub-summary-v6"]
+    schema_version: Literal["bub-summary-v7"]
 
 
 class Fact(StrictModel):
@@ -163,10 +163,27 @@ class Fact(StrictModel):
     message_ids: list[MessageID]
 
 
+def support_evidence(message: EvidenceMessage) -> bool:
+    return (
+        message.role == "agent" and message.visibility == "public"
+        and message.source != "comment"
+        and message.status.upper() not in {"DRAFT", "FAILED", "PENDING"}
+    )
+
+
 class Summary(StrictModel):
     device_info: list[Fact] = Field(default_factory=list, max_length=10)
     customer_feedback: list[Fact] = Field(max_length=1)
     support_responses: list[Fact] = Field(max_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def omit_absent_support(cls, value: Any, info: ValidationInfo) -> Any:
+        snapshot: Snapshot = info.context["snapshot"]
+        if isinstance(value, dict) and not any(support_evidence(m) for m in snapshot.messages):
+            # The source proves this section is absent; retain all other fields for strict validation.
+            return {**value, "support_responses": []}
+        return value
 
     @model_validator(mode="after")
     def check_evidence(self, info: ValidationInfo) -> Self:
@@ -199,10 +216,7 @@ class Summary(StrictModel):
                         and item.text in message.body
                     ):
                         raise ContractIssue("missing_customer_evidence", location)
-                if section == "support_responses" and (
-                    not any(message.role == "agent" or message.mixed_authors for message in cited)
-                    or any(message.visibility == "private" or message.status.upper() in {"DRAFT", "FAILED", "PENDING"} for message in cited)
-                ):
+                if section == "support_responses" and not all(support_evidence(message) for message in cited):
                     raise ContractIssue("missing_support_evidence", location)
         return self
 
@@ -234,7 +248,7 @@ JSON object 模式仅保证 JSON 语法，不能替你检查证据。输出前�
 唯一例外：role=unknown、source=thread、direction=in、visibility=public、status=SUCCESS 的消息，可以在 customer_feedback 逐字摘录反馈原文。
 该例外优先挑选能反映当前问题的关键原文，不逐封摘录；每项只能引用这一条消息，text 必须是 body 中连续的原文片段，不翻译、不改写、不添加“客户说”等前缀，不剪掉否定或条件；选完整的问题描述句，避免摘录联系人或模板签名。
 这只是作者未确认的来信摘录，不把未知角色改成客户。其他 unknown 消息没有这个例外，客服转述也不能伪装成客户来信。
-仅有一封来信也可以输出反馈；没有客服回复就令 support_responses=[]，不编造客服排查或客户执行。
+仅有一封来信也可以输出反馈；没有公开已发的客服回复就令 support_responses=[]，不编造客服排查或客户执行。客服栏的每个引用必须来自 role=agent、visibility=public、source不是comment，且状态不是DRAFT/FAILED/PENDING的消息；客户转述或引用客服话语也不能代替客服消息。
 混合作者转录 mixed_authors=true 中不能把整段归给消息外层 role；只按明确说话者逐句归属，不明确则不写入相应分类。
 严格区分客服提出建议、客户明确确认执行及客户报告执行结果。客服建议升级固件不能写成客户已升级。
 客户未确认执行时只能说“客服建议……”，不能推断已经执行或有效；客户执行及结果放入 customer_feedback 并引用客户原文。

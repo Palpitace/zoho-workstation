@@ -1,5 +1,5 @@
 # input: 已构建 web/dist、Playwright/Chromium 和脚本内合成 API 响应。
-# output: Issue #10 范围恢复/缓存待确认；Bub活动/重试状态一致性、逐票刷新及恢复确认的浏览器证据。
+# output: Bub活动/重试/人工处理状态一致、逐票刷新与恢复确认的浏览器证据。
 # pos: 无真实服务调用的 AI 界面验收。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import copy
 import functools
@@ -52,6 +52,11 @@ def main():
                                 "jev": copy.deepcopy(success)}})
         return {"data": rows, "filters": {"product": [{"value": "D520", "count": 30}]}}
 
+    detail_bub = {
+        "current": {"id": 2, "status": "failed", "error": "Bub: model_rate_limited; HTTP 429; request_id=req-safe"},
+        "success": None, "stale": False, "task_state": "retry_waiting", "attempts": 2,
+        "next_retry_at": "2026-11-09T12:00:00Z"}
+
     def api(route):
         path = urlparse(route.request.url).path
         if route.request.method == "POST":
@@ -61,10 +66,7 @@ def main():
             empty = {"current": None, "success": None, "stale": False}
             route.fulfill(json={"case": empty, "advice": empty, "enabled": False, "busy": False})
         elif path == "/api/tickets/1/analysis":
-            route.fulfill(json={"jev": {"current": None, "success": None, "stale": False}, "bub": {
-                "current": {"id": 2, "status": "failed", "error": "Bub: model_rate_limited; HTTP 429; request_id=req-safe"},
-                "success": None, "stale": False, "task_state": "retry_waiting", "attempts": 2,
-                "next_retry_at": "2026-11-09T12:00:00Z"}})
+            route.fulfill(json={"jev": {"current": None, "success": None, "stale": False}, "bub": detail_bub})
         elif path == "/api/tickets/1":
             route.fulfill(json={"id":"1", "subject":"Synthetic ticket 1", "complete":True, "messages":[], "status":"Open"})
         elif path == "/api/status":
@@ -161,6 +163,16 @@ def main():
             expect(summary.get_by_text("其他分析任务正在执行",exact=False)).to_be_visible()
             expect(summary.get_by_text("最近总结失败",exact=True)).to_have_count(0)
             expect(summary.get_by_text("上游限流（429）",exact=False)).to_be_visible()
+            status["runtime"]["bub_running"] = False
+            detail_bub.update({"task_state": "manual", "retry_blocked": True, "attempts": 3, "next_retry_at": ""})
+            detail_bub["current"]["error"] = "Bub: invalid_summary (missing_support_evidence)"
+            page.get_by_role("button", name="刷新数据", exact=True).click()
+            expect(summary.get_by_text("需人工处理", exact=True)).to_be_visible()
+            expect(summary.get_by_text("连续3次相同证据校验失败，已停止自动重试；核对会话后可手动重新总结。", exact=True)).to_be_visible()
+            expect(summary.get_by_text("自动重试时间", exact=False)).to_have_count(0)
+            expect(summary.get_by_role("button", name="重新总结", exact=True)).to_be_enabled()
+            if screenshot := os.environ.get("STOP_UI_SCREENSHOT"):
+                summary.screenshot(path=screenshot)
             status["runtime"]["sync_recent_limit"] = 50
             status["runtime"]["last_sync_batch"] = {"stage": "selection"}
             status["sync"]["recent_confirmed"] = False

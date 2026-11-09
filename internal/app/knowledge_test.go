@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成证据、固定 Python 进程替身和受保护 HTTP 请求。
-// output: 知识边界及Bub列表/详情/运行状态一致、重启恢复的集成证据。
+// output: 知识边界、Bub列表/详情/运行状态一致及证据失败停止验证。
 // pos: 知识链路端到端回归。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -338,7 +338,7 @@ func TestBubTaskStatusMatchesDetailAndSurvivesRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	cfg := config.Config{Port: "8080", SyncInterval: time.Hour, Bub: config.Model{Enabled: true, Name: "mock"}}
+	cfg := config.Config{Port: "8080", SyncInterval: time.Hour, Bub: config.Model{Enabled: true, Name: "mock"}, Jev: config.Model{Enabled: true, Name: "mock"}}
 	service, err := New(cfg, db, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -384,10 +384,24 @@ func TestBubTaskStatusMatchesDetailAndSurvivesRecovery(t *testing.T) {
 	check("running", 1)
 	db.RecoverAnalysis(ctx)
 	check("retry_waiting", 0)
+	for i := 0; i < 3; i++ {
+		run, started, e := db.StartAnalysis(ctx, req, true)
+		if e != nil || !started {
+			t.Fatal("fixture attempt not recorded")
+		}
+		if e = db.FinishAnalysis(ctx, run.ID, "", nil, fmt.Errorf("Bub: invalid_summary (missing_support_evidence)")); e != nil {
+			t.Fatal(e)
+		}
+	}
+	check("manual", 0)
+	stopped, views, e := service.recordViews(ctx, record)
+	if e != nil || !stopped["bub"].RetryBlocked || !views["bub"].RetryBlocked || stopped["bub"].NextRetryAt != "" || !strings.Contains(stopped["jev"].WaitingReason, "手动") {
+		t.Fatalf("manual stop not consistently exposed: %+v %v", stopped, e)
+	}
 	run, _, _ = db.StartAnalysis(ctx, req, true)
 	db.FinishAnalysis(ctx, run.ID, "mock", json.RawMessage(`{"summary":{"device_info":[],"customer_feedback":[],"support_responses":[]}}`), nil)
 	states, _, _ := service.recordViews(ctx, record)
-	if states["bub"].TaskState != "success" || states["bub"].Attempts != 3 {
+	if states["bub"].TaskState != "success" || states["bub"].Attempts != 6 {
 		t.Fatalf("success lost: %v", states)
 	}
 }

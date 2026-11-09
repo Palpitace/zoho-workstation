@@ -21,7 +21,7 @@
 ai_runs 每次网络尝试先持久记录再发送，按工单、能力、输入 Hash、Schema 和模型读取当前结果；旧输入完成不会覆盖新输入。失败保留已有成功行，结果与当前输入不符时标记过期。
 RecordAnalysisFailure 仅用于发送前的本地校验失败，调用方只传不含正文或凭据的安全错误；它按同一工单/能力/Hash/Schema/模型最多追加一条 `invalid`，同时记录起止时间，保留旧成功结果。
 `invalid` 不属于模型请求，不计入请求次数，也不参与失败重试次数；StartAnalysis 非 force 时跳过同版本 invalid。force 仍不能覆盖正在运行的同输入，调用方必须先完成本地校验，不能用 force 强行发送无效输入。
-AnalysisBudget 只统计 `status!='invalid'` 的真实或保守预留尝试，原有记录计数不变，无需数据库迁移。用户已关闭单轮及累计额度；StartAnalysis 不查累计次数或抛额度错误。同一输入仍最多两次自动失败尝试，成功/invalid 缓存和 running 互斥不变；force 可手动重跑，不能绕过活动请求互斥。
+AnalysisBudget 只统计 `status!='invalid'` 的真实或保守预留尝试，原有记录计数不变，无需数据库迁移。用户已关闭单轮及累计额度；StartAnalysis 不查累计次数或抛额度错误。网络错误持续退避，只有Bub总结同签名连续三次相同证据错误才停止自动重试；成功/invalid缓存和running互斥不变；force 可手动重跑，不能绕过活动请求互斥。
 中断的 running 请求保守计入调用次数。调用方必须在取得 analysis 锁后恢复 running，并持锁完成分析；单独调用旧 API 不会隐式获取操作锁。
 
 Store.Lock 仅允许 `sync`、`analysis`，使用 Open 解析过符号链接的绝对数据库路径创建 `<数据库>.<操作>.lock`。Linux/macOS 使用非阻塞 Flock，Windows 使用 LockFileEx 拒绝同库同类并行写者，忙时返回 ErrBusy，其他失败只返回安全泛化说明。
@@ -65,3 +65,5 @@ SOP 导入始终为 draft，只有 PublishKnowledge 显式操作生效。Replace
 Issue #9：AnalysisView 增加 task_state/attempts，尝试次数按当前输入/Schema/模型计算且不包含本地 invalid；冷却期 retry_waiting，到期 pending，实际 running 才显示执行中，invalid 为 manual。Active 仅内部使用，来自同次历史查询，保留旧输入仍在执行的记录。继续使用 ai_runs，无迁移；安全HTTP错误文本随失败保存，重启保留，旧成功不清空。
 
 滚动测试版：EnableRecentScope 启用当前 Store 的范围过滤，IDs 只查询已确认成员；首次远端未确认时 List/State 展示按创建时间排序的本地最新50张缓存，OutsideScope=true，不参与同步或AI。ReplaceRecent 在事务中替换完整集合并 Reserve 新ID，失败不改变旧集合；Get 保留历史读取并标记 OutsideScope。新增 recent_confirmed 列区分未确认和已确认空集合，旧非空成员自动迁移为已确认；不删除工单/AI/知识历史，不复用表示已合并删除的 sync_stopped。重启后成员集合保留，配置0可重新查询全部历史。
+
+Issue #11：Bub总结在同工单/输入Hash/Schema/请求模型下，最近连续3次failed的证据错误码相同时返回 retry_blocked=true、task_state=manual、清空next_retry_at。白名单为unknown_reference/missing_reference/missing_customer_evidence/missing_support_evidence及对应Go固定校验错误；不同错误或成功中断连续计数。StartAnalysis事务内使用同一判定拒绝自动请求；显式force可再尝试，新输入/版本/模型不继承停止。保留已成功结果、所有历史与计费统计，不增加表或累计请求额度；429/503/超时仍持续退避。

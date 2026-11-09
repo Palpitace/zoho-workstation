@@ -6,7 +6,7 @@
 
 ## 协议和运行
 
-输入只有 `{input:<完整脱敏会话>,config:{api_base,api_key,model},schema_version:"bub-summary-v6"}`。
+输入只有 `{input:<完整脱敏会话>,config:{api_base,api_key,model},schema_version:"bub-summary-v7"}`。
 input 保持 messages、主题、描述等字段平面结构，必有 conversation_hash。不再接收 Jev 参考，完整会话独立传入无工具 SDK；总结完成后由 Go 再提供给 Jev。
 Prompt 保留客户明确诉求、风险报告及近期情绪的明确表达，但不自行评估情绪标签、优先级或风险等级；总结仍需消息引用支撑，建议不等于执行。
 配置不从 `.env` 或其他文件加载；模型必须是 `deepseek:模型名`，地址与 Key 显式传入，拒绝空值以避免 SDK 环境回退。
@@ -103,3 +103,5 @@ input.summary_version 保存上游总结的版本标识，source.source_hash 保
 简化检查：继续使用原有 SDK/配置/环境预检和 Python 进程边界，不新增模型客户端、服务、插件或运行时数据库。新任务与旧总结保持独立类型，避免把跨工单建议混入 Jev；文档解析只保留确实支持的格式和可核对的位置。
 
 Issue #9：main.upstream_failure 为总结与知识入口共用诊断，APIStatusError 按429/其他HTTP区分，APIResponseError 为响应异常。只读取固定 status_code/request_id，禁止字符串化异常、输出body或headers；请求ID白名单校验。合成SDK测试覆盖429、503、异常响应、成功及敏感正文不外泄；没有更改模型、请求重试或证据校验规则。
+
+v7：Summary的before校验按源会话判断是否存在有效客服消息（role=agent、visibility=public、source非comment、状态非DRAFT/FAILED/PENDING）。完全没有时将support_responses规范化为空数组，包括模型错误填入该段/缺失/null；其他字段仍正常严格校验，不把无效客服内容搬到客户反馈、不改原始会话。有有效客服消息时，客服段的每个引用都必须满足同一条件；客户转述、混合发言者标记不能代替客服角色。只有客户来信仍可生成完整客户反馈，并供Jev评估；无新增模型请求。

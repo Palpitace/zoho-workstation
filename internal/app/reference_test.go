@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成 Jev HTTP 服务和仅接收 stdin 的临时 Python 入口。
-// output: Bub→Jev 顺序、自动退避与手动提前重试/历史保留/单次限额、环境预检与缓存复用证据。
+// output: 仅客户来信的 Bub→Jev 自动链路、退避恢复与版本缓存验证。
 // pos: 总结到评估流水线集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app_test
 
@@ -110,7 +110,7 @@ else:
 			}
 			for _, id := range []string{"1", "2", "3", "4"} {
 				snapshot := ticket.Snapshot{ID: id, DepartmentID: "7", Subject: "Synthetic issue", Complete: id != "4", Messages: []ticket.Message{
-					{ID: "m1", Role: "agent", Body: "Please upgrade firmware."},
+					{ID: "m1", Role: "agent", Body: "Please upgrade firmware.", Visibility: "public", Source: "thread", Status: "SUCCESS"},
 					{ID: "m2", Role: "customer", Body: "RAW_ONLY_SENTINEL I have not upgraded. Printer still disconnects."},
 				}}
 				if err = db.Save(ctx, ticket.RawSnapshot{Ticket: json.RawMessage(`{}`)}, snapshot); err != nil {
@@ -511,4 +511,111 @@ func seedSummary(t *testing.T, db *store.Store, snapshot ticket.Snapshot, raw ti
 		t.Fatal(err)
 	}
 	return jevHash
+}
+
+func TestCustomerOnlySummaryAutomaticallyReachesJev(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	if output, err := exec.Command(python, "-m", "venv", "--without-pip", "python/.venv").CombinedOutput(); err != nil {
+		t.Fatalf("venv: %v %s", err, output)
+	}
+	entry := `import json,sys
+if sys.argv[1:] == ["--check"]:
+ print(json.dumps({"ok":True}));sys.exit(0)
+request=json.load(sys.stdin)
+assert len(request["input"]["messages"])==1
+assert request["input"]["messages"][0]["role"]=="customer"
+print(json.dumps({"ok":True,"returned_model":"synthetic","result":{"device_info":[],"customer_feedback":[{"text":"Cannot print","message_ids":["c"]}],"support_responses":[]}}))
+`
+	if err = os.WriteFile("python/main.py", []byte(entry), 0600); err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan json.RawMessage, 1)
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/jev" {
+			w.WriteHeader(503)
+			return
+		}
+		var request struct {
+			State     json.RawMessage `json:"state"`
+			Questions map[string]struct {
+				Criteria map[string]string `json:"criteria"`
+			} `json:"questions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		select {
+		case received <- request.State:
+		default:
+		}
+		answers := map[string]any{}
+		for key, q := range request.Questions {
+			probabilities := map[string]float64{}
+			for choice := range q.Criteria {
+				probabilities[choice] = 0
+			}
+			probabilities["unknown"] = 1
+			answers[key] = map[string]any{"type": "choice", "choice": "unknown", "confidence": 1, "probabilities": probabilities}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"model": "synthetic", "answers": answers, "usage": map[string]int{"input_tokens": 1, "output_tokens": 1}})
+	}))
+	defer remote.Close()
+	ctx := context.Background()
+	db, err := store.Open("data/app.db", "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Reserve(ctx, []string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Save(ctx, ticket.RawSnapshot{}, ticket.Snapshot{ID: "1", DepartmentID: "7", Complete: true, Messages: []ticket.Message{{ID: "c", Role: "customer", Body: "Cannot print", Visibility: "public", Source: "thread", Status: "SUCCESS"}}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Port: "8080", SyncInterval: time.Hour, Zoho: config.Zoho{BaseURL: remote.URL, AccountsURL: remote.URL, DepartmentID: "7"}, Bub: config.Model{Enabled: true, Name: "deepseek:synthetic"}, Jev: config.Model{Enabled: true, Name: "synthetic", URL: remote.URL + "/jev"}}
+	service, err := app.New(cfg, db, zoho.New(cfg.Zoho, remote.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	select {
+	case state := <-received:
+		var input struct {
+			Summary struct {
+				CustomerFeedback []json.RawMessage `json:"customer_feedback"`
+				SupportResponses []json.RawMessage `json:"support_responses"`
+			} `json:"summary"`
+		}
+		if err = json.Unmarshal(state, &input); err != nil || len(input.Summary.CustomerFeedback) != 1 || len(input.Summary.SupportResponses) != 0 {
+			t.Fatalf("Jev did not receive customer-only summary: %s %v", state, err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Jev did not automatically follow customer-only summary")
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		request := httptest.NewRequest("GET", "/api/tickets/1", nil)
+		request.Host = "localhost:8080"
+		w := httptest.NewRecorder()
+		service.Handler().ServeHTTP(w, request)
+		var body struct {
+			AI map[string]app.AIStatus `json:"ai"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+			t.Fatal("ticket unavailable")
+		}
+		if body.AI["bub"].Status == "success" && body.AI["jev"].Status == "success" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("customer-only summary or Jev result not saved")
 }

@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: Issue #10 范围恢复/缓存待确认；滚动范围状态、同源API类型、统一任务标签及安全错误说明。
+// output: 同源API类型、证据失败停止提示、统一任务标签与安全错误说明。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -58,7 +58,7 @@ export type Operation = "sync" | AIKind;
 export type TaskState = "pending" | "running" | "retry_waiting" | "manual" | "waiting" | "success" | "disabled" | "inactive";
 export type BubTask = { ticket_id: string; ticket_number?: string; kind: string; state: TaskState; attempts: number; started_at?: string; elapsed_seconds?: number; last_failed_at?: string; next_retry_at?: string; error?: string; reason?: string };
 export type AIState = {
-  task_state?: TaskState;
+  retry_blocked?: boolean; task_state?: TaskState;
   attempts?: number;
   status: "waiting" | "pending" | "running" | "failed" | "success" | "disabled";
   stale: boolean;
@@ -133,7 +133,7 @@ export type AnalysisRun<Result> = {
   result?: Result;
 };
 
-type AnalysisView<Result> = { task_state?: TaskState; attempts?: number; current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub"; waiting_reason?: string; next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean };
+type AnalysisView<Result> = { retry_blocked?: boolean; task_state?: TaskState; attempts?: number; current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub"; waiting_reason?: string; next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean };
 export type JevView = AnalysisView<{ model: string; answers: Record<string, { type: string; choice: string }> }>;
 
 type SummaryFact = { text: string; message_ids: string[] };
@@ -221,10 +221,11 @@ export function syncLabel(record: TicketRecord): string {
   return filterLabel("sync_status", record.sync_status || "");
 }
 
-export function failureHint(value: { next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean; task_state?: TaskState }): string {
+export function failureHint(value: { retry_blocked?: boolean; next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean; task_state?: TaskState }): string {
   const retry = value.next_retry_at ? `${value.task_state === "pending" ? "等待调度，原重试计划时间" : "自动重试时间"}：${dateTime(value.next_retry_at)}。` : "";
   const time = value.last_failed_at ? `${value.failure_before_start ? "本次启动前的历史失败" : "最近失败"}：${dateTime(value.last_failed_at)}。` : "";
-  return retry + time;
+  const stopped = value.retry_blocked ? "连续3次相同证据校验失败，已停止自动重试；核对会话后可手动重新总结。" : "";
+  return stopped + retry + time;
 }
 
 export function taskLabel(state?: TaskState): string {
