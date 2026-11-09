@@ -28,4 +28,4 @@ downloads.md 补充 Issue #3 环境修复后的人工确认恢复、历史失败
 
 | offline-lab.md | 离线实验 | 批次操作、输入隔离、反馈/版本、验证与已知限制 |
 
-| knowledge-library.md | 知识库指南 | 批量审核、Markdown版本、本地模型与检索验证 |
+| knowledge-library.md | 知识库指南 | 批量审核、Markdown版本、本地模型与三平台验收入口 |

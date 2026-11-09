@@ -42,7 +42,7 @@ Go保存SQLite中的向量，按条目版本、内容Hash、模型和分块版�
 
 源码开发先执行 `python scripts/build_embedding.py`（构建机需CMake和C++编译器），便携包已包含程序。前端及Python依赖使用现有锁文件；不用安装Node生产服务、Dify、LangChain或向量数据库。
 
-`go test ./...`、Python合成契约、前端类型/构建与文档检查覆盖基本功能。`VERIFY_LOCAL_EMBEDDING=1 go test ./internal/embedding -run TestNativeRetrieval -v -timeout=30m` 显式下载固定模型并做真实CPU检索检查，无生成模型收费调用。GitHub Actions在Windows x64、macOS Intel/Apple Silicon运行该验证并打包；当前机器的Linux结果不能冒充这些平台已经通过。
+`go test ./...`、Python合成契约、前端类型/构建与文档检查覆盖基本功能。`VERIFY_LOCAL_EMBEDDING=1 go test ./internal/embedding -run TestNativeRetrieval -v -timeout=30m` 显式下载固定模型并做真实CPU检索检查，无生成模型收费调用。GitHub Actions在Windows x64、macOS Intel/Apple Silicon运行该验证并打包；三平台已在[原生构建42581051574](https://github.com/Palpitace/zoho-workstation/actions/runs/42581051574)通过，包括实际解压包的图文编辑；对应代码提交为10c5923。
 
 检索比较使用固定中英文/同义问题、机型例外和无答案问题。来源推导的暂定预期不等于业务人员标注，测试通过不代表已证明生产准确率。
 
