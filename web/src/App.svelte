@@ -1,14 +1,15 @@
 <!-- input: 浏览器导航、Go 查询/操作 API 及会话防护令牌。 -->
-<!-- output: 工单/知识库导航、组合筛选、来源定位和可见页面定期刷新。 -->
+<!-- output: 工单/知识库/离线实验导航、组合筛选、来源定位和可见页面定期刷新。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Activity, BookOpen, Inbox, RefreshCw } from "@lucide/svelte";
+  import { Activity, BookOpen, FlaskConical, Inbox, RefreshCw } from "@lucide/svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import TicketList from "$lib/TicketList.svelte";
   import TicketDetail from "$lib/TicketDetail.svelte";
   import RunStatus from "$lib/RunStatus.svelte";
   import KnowledgePage from "$lib/KnowledgePage.svelte";
+  import LabPage from "$lib/LabPage.svelte";
   import { getJSON, postAction, type TicketRecord, type SystemStatus, type JevView, type BubView, type AIKind, type Operation, type FilterOptions, type FilterKey, type SearchFilters, defaultSearch, emptyFilters } from "$lib/api";
 
   let hash = $state(window.location.hash);
@@ -17,6 +18,8 @@
   const ticketID = $derived(route.startsWith("#/tickets/") ? route.slice("#/tickets/".length) : "");
   const knowledgePage = $derived(route === "#/knowledge" || route.startsWith("#/knowledge/"));
   const knowledgeID = $derived(route.startsWith("#/knowledge/") ? route.slice("#/knowledge/".length) : "");
+  const labPage = $derived(route === "#/lab" || route.startsWith("#/lab/"));
+  const labID = $derived(route.startsWith("#/lab/") ? route.slice("#/lab/".length) : "");
   let knowledgeRevision = $state(0);
   const statusPage = $derived(hash === "#/status");
   let records = $state<TicketRecord[]>([]);
@@ -86,7 +89,7 @@
       params.set(key, boundary.toISOString());
     }
     const [ticketsResult, statusResult, detailResult, analysisResult] = await Promise.allSettled([
-      !ticketID && !statusPage && !knowledgePage ? getJSON<{ data: TicketRecord[]; filters: FilterOptions }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
+      !ticketID && !statusPage && !knowledgePage && !labPage ? getJSON<{ data: TicketRecord[]; filters: FilterOptions }>(`/api/tickets?${params}`, signal) : Promise.resolve(null),
       knownStatus ? Promise.resolve(knownStatus) : getJSON<SystemStatus>("/api/status", signal),
       selected ? getJSON<TicketRecord>(`/api/tickets/${selected}`, signal) : Promise.resolve(null),
       selected ? getJSON<{ jev: JevView; bub: BubView }>(`/api/tickets/${selected}/analysis`, signal) : Promise.resolve(null),
@@ -106,7 +109,7 @@
       else if (analysisResult.status === "rejected") analysisError = `${jev || bub ? "刷新失败，仍显示旧分析数据。" : ""}${errorText(analysisResult.reason)}`;
     }
     loading = refreshing = detailLoading = analysisLoading = false;
-    if (knowledgePage) knowledgeRevision += 1;
+    if (knowledgePage || labPage) knowledgeRevision += 1;
   }
 
   function applySearch() {
@@ -185,16 +188,17 @@
 <div class="min-h-screen bg-background text-foreground md:grid md:grid-cols-[208px_minmax(0,1fr)]">
   <aside class="border-b bg-muted/45 md:sticky md:top-0 md:flex md:h-screen md:flex-col md:border-r md:border-b-0">
     <div class="px-5 py-5 md:py-7"><p class="font-semibold">工单工作台</p><p class="mt-1 text-xs text-muted-foreground">Zoho Desk · 只读</p></div>
-    <nav aria-label="主导航" class="flex gap-1 px-3 pb-3 md:flex-col">
-      <Button href="#/tickets" variant={!statusPage && !knowledgePage ? "secondary" : "ghost"} aria-current={!statusPage && !knowledgePage ? "page" : undefined} class="h-10 justify-start"><Inbox size={17} aria-hidden="true" />工单</Button>
+    <nav aria-label="主导航" class="flex flex-wrap gap-1 px-3 pb-3 md:flex-col md:flex-nowrap">
+      <Button href="#/tickets" variant={!statusPage && !knowledgePage && !labPage ? "secondary" : "ghost"} aria-current={!statusPage && !knowledgePage && !labPage ? "page" : undefined} class="h-10 justify-start"><Inbox size={17} aria-hidden="true" />工单</Button>
       <Button href="#/knowledge" variant={knowledgePage ? "secondary" : "ghost"} aria-current={knowledgePage ? "page" : undefined} class="h-10 justify-start"><BookOpen size={17} aria-hidden="true" />知识库</Button>
+      <Button href="#/lab" variant={labPage ? "secondary" : "ghost"} aria-current={labPage ? "page" : undefined} class="h-10 justify-start"><FlaskConical size={17} aria-hidden="true" />离线实验</Button>
       <Button href="#/status" variant={statusPage ? "secondary" : "ghost"} aria-current={statusPage ? "page" : undefined} class="h-10 justify-start"><Activity size={17} aria-hidden="true" />运行状态</Button>
     </nav>
     <div class="mt-auto hidden border-t px-5 py-5 text-xs text-muted-foreground md:block"><p>当前部门</p><p class="mt-2 break-all font-medium text-foreground">{status?.sync.department_id || "等待加载"}</p></div>
   </aside>
   <div class="min-w-0">
     <header class="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b px-5 py-3 lg:px-8">
-      <span class="text-sm text-muted-foreground">{statusPage ? "运行状态" : knowledgePage ? "知识库" : ticketID ? "工单 / 详情" : "工单 / 列表"}</span>
+      <span class="text-sm text-muted-foreground">{statusPage ? "运行状态" : labPage ? "离线实验" : knowledgePage ? "知识库" : ticketID ? "工单 / 详情" : "工单 / 列表"}</span>
       <div class="flex flex-wrap items-center gap-2">
         <span role="status" class="min-h-5 w-24 text-xs text-muted-foreground">{refreshing ? "正在刷新数据…" : ""}</span>
         <Button variant="outline" class="h-10" onclick={() => { if (!refreshing) void refresh(); }} disabled={refreshing}><RefreshCw size={15} aria-hidden="true" class={refreshing ? "motion-safe:animate-spin" : ""} />刷新数据</Button>
@@ -204,7 +208,7 @@
     <main aria-busy={refreshing} id="main-content" tabindex="-1" class="mx-auto max-w-7xl p-5 outline-none lg:p-8">
       {#if actionErrors.sync}<p role="alert" class="mb-5 text-sm text-destructive">同步操作：{actionErrors.sync}</p>{/if}
       {#if notices.sync}<p role="status" class="mb-5 text-sm text-muted-foreground">同步操作：{notices.sync}</p>{/if}
-      {#if !statusPage && !knowledgePage && status}
+      {#if !statusPage && !knowledgePage && !labPage && status}
         <dl class="mb-7 flex flex-wrap gap-x-7 gap-y-2 border-b pb-5 text-sm text-muted-foreground">
           <div class="flex gap-2"><dt>已发现</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.selected}</dd></div>
           <div class="flex gap-2"><dt>已有快照</dt><dd class="font-medium text-foreground tabular-nums">{status.sync.ready}</dd></div>
@@ -217,6 +221,8 @@
         <RunStatus {status} {loading} error={statusError} onRefresh={() => refresh(true)} />
       {:else if knowledgePage}
         {#key knowledgeID}<KnowledgePage entryID={knowledgeID} blockID={routeQuery.get("block") || ""} token={statusError ? "" : status?.csrf_token || ""} refreshVersion={knowledgeRevision} />{/key}
+      {:else if labPage}
+        {#key labID}<LabPage batchID={labID} token={statusError ? "" : status?.csrf_token || ""} refreshVersion={knowledgeRevision} />{/key}
       {:else if ticketID}
         <TicketDetail token={statusError ? "" : status?.csrf_token || ""} referenceID={routeQuery.get("message") || ""} ticket={detail} loading={detailLoading} error={detailError} {jev} {bub} {analysisLoading} {analysisError} {controls} onRerun={(kind: AIKind) => operate(kind)} />
       {:else}

@@ -1,5 +1,5 @@
 // input: 临时 SQLite 数据库、合成文档版本和已保存工单。
-// output: 草稿隔离、显式发布、版本竞争、来源兼容性及重启持久性的行为验证。
+// output: 草稿隔离、显式发布、来源继承、历史恢复及重启持久性的行为验证。
 // pos: 知识生命周期集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store_test
 
@@ -198,4 +198,98 @@ func TestKnowledgeEditedDraftKeepsEffectivePredecessor(t *testing.T) {
 	if err := db.PublishKnowledge(ctx, draft.ID); !errors.Is(err, store.ErrKnowledgeConflict) {
 		t.Fatalf("earlier draft superseded reviewed edit: %v", err)
 	}
+}
+
+func TestKnowledgeScopeLineageAndRestore(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "history.db"), "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	original := knowledge.Entry{Kind: "sop", Title: "Power FAQ", Scope: "technical", SourceHash: "technical-1", SourceTickets: []string{"ticket-a"}, Blocks: []knowledge.Block{{ID: "step", Text: "Check the specified power supply."}}}
+	first, err := db.SaveKnowledge(ctx, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.PublishKnowledge(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	next := original
+	next.SourceHash = "technical-2"
+	next.ReplacesID = first.ID
+	next.Scope = ""
+	next.SourceTickets = []string{"ticket-b"}
+	next.Blocks = []knowledge.Block{{ID: "step", Text: "Check the specified supply and cable."}}
+	second, err := db.SaveKnowledge(ctx, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Scope != "technical" || len(second.SourceTickets) != 2 {
+		t.Fatalf("revision lost provenance: %+v", second)
+	}
+	if err = db.PublishKnowledge(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := db.RestoreKnowledge(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Status != "draft" || restored.ReplacesID != second.ID || restored.Blocks[0].Text != first.Blocks[0].Text || len(restored.SourceTickets) != 2 {
+		t.Fatalf("restore mutated history or lost lineage: %+v", restored)
+	}
+	if active, _ := db.Knowledge(ctx, second.ID); active.Status != "published" {
+		t.Fatal("restore implicitly published")
+	}
+	if err = db.PublishKnowledge(ctx, restored.ID); err != nil {
+		t.Fatal(err)
+	}
+	history, err := db.KnowledgeHistory(ctx, first.ID)
+	if err != nil || len(history) != 3 || history[0].ID != first.ID || history[2].ID != restored.ID {
+		t.Fatalf("wrong family history: %+v %v", history, err)
+	}
+	policy := original
+	policy.Scope = "policy"
+	policy.SourceHash = "policy-1"
+	policy.SourceTickets = nil
+	rules, err := db.SaveKnowledge(ctx, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.PublishKnowledge(ctx, rules.ID); err != nil {
+		t.Fatal(err)
+	}
+	proposal := policy
+	proposal.Scope = "technical"
+	proposal.SourceHash = "policy-auto"
+	proposal.ReplacesID = rules.ID
+	proposal.LabBatchID = 1
+	if _, err = db.SaveKnowledge(ctx, proposal); err == nil {
+		t.Fatal("model proposal replaced policy")
+	}
+	reference := original
+	reference.Scope = ""
+	reference.SourceHash = "unclassified"
+	reference.SourceTickets = nil
+	unclassified, err := db.SaveKnowledge(ctx, reference)
+	if err != nil || unclassified.Scope != "reference" {
+		t.Fatalf("unclassified document became editable technical source: %+v %v", unclassified, err)
+	}
+	if err = db.PublishKnowledge(ctx, unclassified.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending := original
+	pending.SourceHash = "manual-classification"
+	pending.ReplacesID = unclassified.ID
+	manual, err := db.SaveKnowledge(ctx, pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.SourceHash = "automatic-via-draft"
+	pending.ReplacesID = manual.ID
+	pending.LabBatchID = 1
+	if _, err = db.SaveKnowledge(ctx, pending); err == nil {
+		t.Fatal("automatic proposal bypassed read-only predecessor through pending reclassification")
+	}
+
 }

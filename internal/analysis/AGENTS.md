@@ -9,6 +9,8 @@
 | AGENTS.md | 目录约定 | 输入和外部分析边界 |
 | knowledge.go | 知识模型边界 | 独立案例/建议协议、无工具 Python 调用、消息与来源校验 |
 | knowledge_test.go | 知识契约回归 | 建议与执行区分、可空设备、引用和来源版本 |
+| lab.go | 离线实验边界 | 固定 Python 入口、回复/评估/草稿协议、引用/政策校验与失败元信息 |
+| lab_test.go | 离线契约回归 | 历史引用范围、独立评价、只读政策及拒绝输出后的请求记录 |
 | documents.go | 文档提取边界 | 固定本地入口、带位置文本块及不完整拒绝 |
 | input.go | 分析输入 | Bub 完整会话、Jev 总结输入及实际 Hash |
 | input_test.go | 行为测试 | 保留否定事实、会话不变、无反向参考和脱敏 |
@@ -18,6 +20,10 @@
 | bub_test.go | 摘要契约测试 | 可空分类/角色来源校验、真实子进程模拟代理与凭据环境隔离 |
 
 Bub 使用 PythonExecutable 选择固定本地解释器与 python/main.py，无 Shell 拼接。stdin 仅传完整脱敏会话、Bub 专用模型配置及 Schema；子进程环境保留固定 PATH/编码/不写缓存，并仅按名称继承非空 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 及其小写形式，不继承 Zoho/Jev/Bub Key 或其他父进程变量。代理值可能含认证信息，禁止日志输出；大小写优先级和 NO_PROXY 行为由锁定的 SDK HTTP 客户端处理。90 秒上限、stdout 1 MiB 上限、stderr 不回显；失败不清已有结果。连接失败、超时、上游错误分别透传固定 model_connection_failed、model_timeout、model_upstream_failed，不输出异常原文。结构校验能拒绝未知引用、错角色或未发客服消息，不能证明模型自由文本事实正确。
+
+`Lab` 使用同一解释器/进程隔离边界调用固定 `python/lab.py`，任务仅 reply/evaluate/propose，Schema 为 `bub-lab-v1`。历史前缀、固定知识和反馈由 lab/app 准备，本层不检索或读取工单。evaluate 必须有当前回复且不接收已有评价或人工反馈，避免把他人的分数当成独立判断。`LabResult` 在成功和供应商返回后本地校验失败时均保留模型版本、请求 ID、用量；错误正文只允许固定码，失败的原输出丢弃。机械校验限制引用、枚举、大小和政策改写：草稿只允许 technical，替换目标只能是已提供的正数技术 SOP 版本，不能把 policy 片段作为提炼技术规则的证据。引用存在不证明语义正确，人工复核仍必要。来源 Scope 随协议传入，空值按只读 reference 处理。
+
+FAQ 合并正文另按 UTF-8 字节校验 ≤12 KiB，为检索时附加的有界原文问题留出空间；不只检查各字段字符数。未完整检索的技术 SOP 由 lab 准备层降为只读 reference，因此模型不能通过完整条目替换 ID 丢弃未见章节。
 
 代理回归使用本机 CONNECT 模拟代理和真实 Go→Python→Bub/Republic 路径，单次子进程验证全部 8 项白名单原值继承、实际 CONNECT 路由及父环境凭据隔离，不重复验证 SDK 的大小写优先级；需要先执行 make setup 安装固定 Python 环境，不读取 .env 或访问真实模型。错误分类另由 Python SDK Mock 验证；不新增模型预算、配置项或依赖。
 
@@ -57,3 +63,5 @@ Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索�
 文档使用 documents.py 本地解析，未发布前不发送模型。单文件 10 MiB、正文 256 KiB、每块 8 KiB、最多 4096 块；PDF 页和 DOCX 段落/表格及 Markdown 行位置保留。扫描页、图像或无法提取的内容显式拒绝，不做 OCR。原件由 app 私有保存，提取内容再脱敏。详情见 [知识使用说明](../../docs/knowledge.md)。
 
 知识增量验证中，当前容器实测单独 SDK 导入约 16.7 秒，旧代理集成测试的 20 秒总 context 出现无 CONNECT 的超时。测试等待提高为 60 秒，仍断言一次真实本地 CONNECT 和完整凭据隔离；业务超时/重试未改变，不降低语义断言。
+
+知识正文保留为本地Markdown，`RedactedSources`在建议和离线模型边界脱敏正文/标题/产品，保留版本Hash和引用。`ConvertDocument`使用固定Python字节流转Markdown并返回完整性警告；旧块提取接口兼容既有引用。

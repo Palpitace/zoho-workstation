@@ -25,3 +25,7 @@ compatibility.md 记录组合筛选 API/前端协同部署及 Combobox 依赖。
 downloads.md 补充 Issue #3 环境修复后的人工确认恢复、历史失败时间、一次尝试与重启重新确认规则。
 
 当前 downloads.md 按用户最新边界说明 UTC+8 11月5日起持续发现、无限累计但有冷却的自动重试与展示引用折叠；替代此前人工解除耗尽规则。
+
+| offline-lab.md | 离线实验 | 批次操作、输入隔离、反馈/版本、验证与已知限制 |
+
+| knowledge-library.md | 知识库指南 | 批量审核、Markdown版本、本地模型与三平台验收入口 |

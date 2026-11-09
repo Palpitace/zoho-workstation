@@ -63,6 +63,7 @@ func KnowledgeInputBytes(conversation, summaryResult json.RawMessage, version st
 	if json.Unmarshal(summaryResult, &saved) != nil || len(saved.Summary) == 0 {
 		return nil, "", errors.New("current factual summary is unavailable")
 	}
+	sources = RedactedSources(sources)
 	body, err := json.Marshal(KnowledgeInput{conversation, saved.Summary, sources, version})
 	digest := sha256.Sum256(body)
 	hash := hex.EncodeToString(digest[:])
@@ -335,4 +336,16 @@ func caseProductSupported(c Case, body json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+// RedactedSources keeps canonical knowledge local while minimizing model input.
+func RedactedSources(sources []knowledge.Source) []knowledge.Source {
+	out := append([]knowledge.Source{}, sources...)
+	for i := range out {
+		clean := ticket.RedactedSnapshot(ticket.Snapshot{Subject: out[i].Title, Description: out[i].Text, Product: out[i].Product}, ticket.RawSnapshot{})
+		out[i].Title = clean.Subject
+		out[i].Text = clean.Description
+		out[i].Product = clean.Product
+	}
+	return out
 }

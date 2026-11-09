@@ -11,3 +11,5 @@
 | main.go | 检查入口 | 轻量文档结构检查 |
 
 头部检查先统一 CRLF 为 LF，再跳过 shebang/build tag/空行，避免 Windows checkout 换行误报；缺失头部仍拒绝。
+
+`runtime`为第三方推理构建产物，与bin/dist一样排除，不要求修改第三方文件头或建立目录文档。

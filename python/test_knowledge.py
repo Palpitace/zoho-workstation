@@ -31,7 +31,7 @@ def context():
         ]},
         "summary": {"device_info": [], "customer_feedback": [], "support_responses": []},
         "sources": [{"id": "knowledge:1:page-1", "entry_id": 1, "block_id": "page-1",
-                     "title": "P1 troubleshooting", "kind": "sop", "product": "P1", "text": "Check media size"}],
+                     "title": "P1 troubleshooting", "kind": "sop", "scope": "technical", "product": "P1", "text": "Check media size"}],
     })
 
 
@@ -175,7 +175,9 @@ class DocumentExtractionTest(unittest.TestCase):
         result = self.extract("manual.pdf", file.getvalue())
         self.assertEqual(result["blocks"], [{"id": "page-1", "text": "Do not reset P1"}])
         self.assertTrue(result["incomplete"])
-        self.assertEqual(result["warnings"], ["empty_pdf_pages"])
+        self.assertIn("empty_pdf_pages", result["warnings"])
+        self.assertIn("Do not reset P1", result["markdown"])
+        self.assertTrue(set(result["warnings"]) <= {"empty_pdf_pages", "conversion_empty"})
         blank = PdfWriter()
         blank.add_blank_page(width=612, height=792)
         file = io.BytesIO()

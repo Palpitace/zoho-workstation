@@ -1,5 +1,5 @@
 # input: 已构建前端、Go/uv 工具链、固定 Python 版本和锁定依赖。
-# output: 携带总结/知识/文档入口且不含配置和数据的本机便携包、构建元信息及 SHA256。
+# output: 携带 Python 入口、本地 CPU 推理和编辑器的便携包，不含凭据/模型/知识数据。
 # pos: GitHub Actions 与本地共用的打包入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -34,6 +34,9 @@ def main():
     with tempfile.TemporaryDirectory(dir=ROOT / ".cache") as temporary:
         stage = Path(temporary) / name
         stage.mkdir()
+        if not (ROOT / "runtime" / "llama").is_dir():
+            run("python", "scripts/build_embedding.py")
+        shutil.copytree(ROOT / "runtime" / "llama", stage / "runtime" / "llama")
         shutil.copytree(home, stage / "runtime" / "python", symlinks=system != "windows")
         python = stage / "runtime" / "python" / ("python.exe" if system == "windows" else "bin/python3")
         requirements = Path(temporary) / "requirements.txt"
@@ -48,11 +51,12 @@ def main():
             build_env["OPENSSL_STATIC"] = "1"
             build_env["OPENSSL_DIR"] = run("brew", "--prefix", "openssl@3", capture_output=True).stdout.strip()
         run("uv", "pip", "install", "--python", str(python), "--target", str(stage / "python" / "packages"), "--require-hashes", "--link-mode", "copy", *wheel_options, "-r", str(requirements), env=build_env)
-        for file in ("main.py", "knowledge.py", "documents.py", "pyproject.toml", "uv.lock"):
+        for file in ("main.py", "knowledge.py", "documents.py", "lab.py", "pyproject.toml", "uv.lock"):
             shutil.copy2(ROOT / "python" / file, stage / "python" / file)
         shutil.copytree(ROOT / "web" / "dist", stage / "web" / "dist")
         shutil.copy2(ROOT / ".env.example", stage / ".env.example")
         shutil.copy2(ROOT / "docs" / "downloads.md", stage / "README.md")
+        shutil.copy2(ROOT / "docs" / "knowledge-library.md", stage / "knowledge-library.md")
         launcher = "start.cmd" if system == "windows" else "start.command"
         shutil.copy2(ROOT / "scripts" / launcher, stage / launcher)
         (stage / launcher).chmod(0o755)

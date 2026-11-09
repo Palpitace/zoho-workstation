@@ -1,5 +1,5 @@
 # input: stdin 中文件名及 Base64 文档内容，不接受文件系统路径。
-# output: 保留段落或页码锚点的文本块、明确的不完整标记及安全失败码。
+# output: Markdown、旧段落/页码片段、明确的不完整标记及安全失败码。
 # pos: Word/PDF/Markdown 的离线有界提取入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -13,9 +13,6 @@ import sys
 import warnings
 from zipfile import BadZipFile, ZipFile
 
-from docx import Document
-from docx.table import Table
-from pypdf import PdfReader
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_TEXT_BYTES = 256 * 1024
@@ -68,6 +65,9 @@ def extract_text(content: bytes) -> tuple[list[tuple[str, str]], list[str]]:
 
 
 def extract_docx(content: bytes) -> tuple[list[tuple[str, str]], list[str]]:
+    from docx import Document
+    from docx.table import Table
+
     try:
         with ZipFile(io.BytesIO(content)) as archive:
             members = archive.infolist()
@@ -98,6 +98,10 @@ def extract_docx(content: bytes) -> tuple[list[tuple[str, str]], list[str]]:
 
 
 def extract_pdf(content: bytes) -> tuple[list[tuple[str, str]], list[str]]:
+    if not content.startswith(b"%PDF-"):
+        raise DocumentError("invalid_document")
+    from pypdf import PdfReader
+
     reader = PdfReader(io.BytesIO(content), strict=True)
     if reader.is_encrypted:
         raise DocumentError("encrypted_document")
@@ -150,7 +154,18 @@ def extract(payload: dict) -> dict:
         raise DocumentError("document_too_large")
     if not blocks:
         raise DocumentError("no_extractable_text")
-    return {"ok": True, "blocks": blocks, "incomplete": bool(flags), "warnings": flags}
+    markdown = content.decode("utf-8-sig") if extension in {".md", ".txt"} else ""
+    if extension in {".docx", ".pdf"}:
+        # Narrow byte-stream conversion: no URL, plugins or cloud clients.
+        from markitdown import MarkItDown, StreamInfo
+        converted = MarkItDown(enable_plugins=False).convert_stream(io.BytesIO(content), stream_info=StreamInfo(extension=extension))
+        markdown = converted.markdown
+        if not markdown.strip():
+            flags.append("conversion_empty")
+            markdown = "\n\n".join(text for _, text in raw_blocks)
+    if not markdown.strip() or len(markdown.encode("utf-8")) > MAX_TEXT_BYTES:
+        raise DocumentError("document_too_large")
+    return {"ok": True, "blocks": blocks, "markdown": markdown, "incomplete": bool(flags), "warnings": flags}
 
 
 def main() -> int:

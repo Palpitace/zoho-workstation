@@ -1,5 +1,5 @@
 // input: SQLite 路径、固定部门和原始/规范化工单快照。
-// output: 工单、同步进度、可追溯知识版本及同库操作锁。
+// output: 工单、同步进度、可追溯知识/离线批次和同库操作锁。
 // pos: Go 独占数据库边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -147,6 +147,10 @@ func Open(path, department string) (*Store, error) {
 		return nil, errors.New("database belongs to another department; use a separate database")
 	}
 	if err = s.initKnowledge(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = s.initLab(); err != nil {
 		db.Close()
 		return nil, err
 	}

@@ -90,3 +90,24 @@ GET `/api/knowledge?q=&status=`、`/api/knowledge/:id`；POST `/api/knowledge/im
 GET `/api/tickets/:id/knowledge` 独立返回 case/advice 状态和来源快照，POST 原分析路径的 `/advice` 可重跑。所有操作复用本机 Host/Origin/CSRF。SOP 草稿不影响当前建议，发布替代/停用后相应建议立即标过期，随后自动更新；事实总结、Jev 和同步不受知识失败影响。知识正文仅作数据，不增加运行时工具或自主回复。
 
 知识列表 API 只返回条目元信息，blocks/message_ids 置为空数组，详情端点按需读取完整证据，避免每次轮询发送全部文档正文；存储/检索内容保持不变。
+
+## 离线 FAQ 实验（2026-11-09）
+
+| lab.go | 批次执行 | 共享 Bub 槽、先保存调用、有限流程与暂停恢复 |
+| lab_http.go | 人工操作 | 选择/创建批次、启动暂停、评分和修订草稿 |
+| lab_test.go | 集成验证 | 真实 Python 替身进程与 SQLite 的模拟到审核链路 |
+
+GET /api/lab/candidates?from=&until= 只读取授权起点以后最近最多50张本地完整有效工单；缺少可靠历史节点时解释原因。POST /api/lab/batches 接受 ticket_ids/knowledge_ids/groups/from/until 或 parent_id；新批固定完整脱敏快照、知识、分组及模型签名。已暂停或完成批次可明确创建下一轮，开发反馈含被评回复，留出不学习。创建不调用模型。GET /api/lab/batches 和 /:id 查询，详情 revision 相同时仅返回 unchanged，避免反复传完整会话。
+
+POST /:id/start、/:id/pause、/:id/feedback、/:id/drafts 复用 Host/Origin/CSRF 边界。最多一个运行批次，与总结/案例/建议轮转共享名额。每个步骤先写 running，调用失败保存并最多重试一次；无活动 worker 的 running 视为结果不确定，暂停后人工恢复。停机暂停，不擅自重发不确定调用。
+
+评分与模型完成分别在 SQLite 事务读取最新状态后追加，不覆盖并发反馈。只有全部留出原版/候选评估成功返回，且候选未被新修订取代，才能晋升草稿；明确发布仍检查原批验证完整和当前正式前驱。模型评分不作真值。技术候选继承所有学习/开发与固定知识来源工单，原文不写日志。已有事实总结→Jev、同步和工单查看不依赖离线实验成功。
+
+| knowledge_embedding.go | 检索编排 | 增量向量索引、查询缓存、混合召回与降级状态 |
+| knowledge_import.go | 批量解析 | ZIP/多文档、原件保留、素材下载和审核预览 |
+| knowledge_library.go | 知识管理 API | 具名库/分类、批量确认重试、图片和 Markdown 导出 |
+| knowledge_library_test.go | 小型集成验证 | 分类去重、风险确认、图片重试、部门与降级 |
+
+知识管理API新增 libraries/categories、import-batch预览/确认/重试、assets上传读取、export与embedding/retrieve。原件、素材和批次清单放私有data/knowledge，图像下载只允许校验后的公网HTTPS直连目标，重定向同样检查；不爬取链接站点。批次保存草稿不要求风险确认，正式发布需确认且素材完整。批次锁独立于全局调度锁。后台索引仅发布版本，每5秒增量建立文档与当前成功Bub查询向量，状态读取不启动推理。管理页可查看所有自有库，检索及实验创建必须明确部门；新实验/后续批次不能绕过当前部门绑定，历史快照不改写。
+
+批量导入未知资料默认reference，清单明确scope可保留；引用式图片规范化，无法支持的图片语法/缺图阻止发布。已保存批次草稿修改时关联原EntryID，内容不变复用版本。批次确认不覆盖用户已有正式知识。

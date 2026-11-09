@@ -25,3 +25,5 @@
 Issue #6：refresh 统一等待 status、详情和 analysis 的实际请求完成，不再使用 revision/effect 二次触发。首次无内容显示加载，已有内容时保留正文/结果，顶部固定宽度状态和旋转图标反馈，遵守 reduced motion。Promise.allSettled 独立处理失败端点、保留成功内容并提示旧数据；同一 AbortController 隔离新查询/导航，顶部手动刷新处理中合并重复点击，静默轮询不叠加请求。
 
 知识库导航使用 #/knowledge 与 #/knowledge/<id>，独立于工单 ID；query 中的 block/message 仅用于来源定位，不混入 API ID。知识页复用全局刷新节奏，更新版本信号不会丢弃编辑中的草稿。
+
+App.svelte 增加独立离线实验路由 #/lab 与 #/lab/:id，复用状态轮询；页面按批次 key 隔离，编辑中的评分不会被后台刷新替换。
