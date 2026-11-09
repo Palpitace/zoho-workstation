@@ -1,5 +1,5 @@
 // input: 合成 Bub JSON、固定消息引用、隔离子进程及本地模拟代理。
-// output: 引用诊断路径白名单； 整单事实/来源约束、代理继承与凭据隔离、离线环境安全诊断证据。
+// output: HTTP诊断白名单、引用约束、代理继承与凭据隔离证据。
 // pos: Python 输出进入 Go 的验证边界测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis_test
 
@@ -170,16 +170,45 @@ func TestBubEvidenceDiagnosticPathIsSafe(t *testing.T) {
 		{`["customer_feedback",100000,"message_ids"]`, ""},
 	} {
 		t.Run(tc.location, func(t *testing.T) {
-			body := `{"ok":false,"error":"invalid_summary","diagnostics":[{"code":"missing_reference","loc":` + tc.location + `}]}`
+			body := `{"ok":false,"error":"invalid_summary","request_id":"req-validation","diagnostics":[{"code":"missing_reference","loc":` + tc.location + `}]}`
 			script := "print(" + fmt.Sprintf("%q", body) + ")\n"
 			if err := os.WriteFile("python/main.py", []byte(script), 0600); err != nil {
 				t.Fatal(err)
 			}
 			_, _, err := analysis.Bub(context.Background(), config.Model{Name: "deepseek:synthetic", Key: "synthetic", URL: "https://model.invalid"}, json.RawMessage(`{}`))
-			want := "Bub: invalid_summary (missing_reference)" + tc.suffix
+			want := "Bub: invalid_summary; request_id=req-validation (missing_reference)" + tc.suffix
 			if err == nil || err.Error() != want {
 				t.Fatalf("safe error = %v, want %s", err, want)
 			}
 		})
+	}
+}
+
+func TestBubAndKnowledgeRetainSafeHTTPDiagnostics(t *testing.T) {
+	root, _ := filepath.Abs("../..")
+	t.Chdir(t.TempDir())
+	os.MkdirAll("python", 0700)
+	if err := os.Symlink(filepath.Join(root, "python/.venv"), "python/.venv"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"req-safe-123", "unsafe/private body"} {
+		envelope, _ := json.Marshal(map[string]any{"ok": false, "error": "model_rate_limited", "http_status": 429, "request_id": id, "body": "synthetic-private-body"})
+		script := "print(" + fmt.Sprintf("%q", string(envelope)) + ")\n"
+		os.WriteFile("python/main.py", []byte(script), 0600)
+		os.WriteFile("python/knowledge.py", []byte(script), 0600)
+		for _, kind := range []string{"bub", "case", "advice"} {
+			var err error
+			if kind == "bub" {
+				_, _, err = analysis.Bub(context.Background(), config.Model{}, json.RawMessage(`{}`))
+			} else {
+				_, _, err = analysis.Knowledge(context.Background(), config.Model{}, kind, json.RawMessage(`{}`))
+			}
+			if err == nil || !strings.Contains(err.Error(), "HTTP 429") || strings.Contains(err.Error(), "private") {
+				t.Fatalf("unsafe or missing diagnostic: %v", err)
+			}
+			if id == "req-safe-123" && !strings.Contains(err.Error(), id) {
+				t.Fatal("request id missing")
+			}
+		}
 	}
 }

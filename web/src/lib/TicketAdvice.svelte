@@ -1,7 +1,8 @@
 <!-- input: 当前工单 ID、会话消息和内存中的会话防护令牌。 -->
-<!-- output: 独立排查建议、来源定位及其等待/失败/过期状态。 -->
+<!-- output: 共享任务状态、内部建议及来源/消息证据展示。 -->
 <!-- pos: 工单事实总结之外的内部处理建议。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
+  import { taskLabel } from "./api";
   import { onMount } from "svelte";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -23,7 +24,7 @@
   const view = $derived(knowledgeState?.advice);
   const result = $derived(view?.success?.result);
   const failed = $derived(view?.current?.status === "failed" || view?.current?.status === "invalid");
-  const blocked = $derived(!token ? "等待有效运行状态" : !knowledgeState?.enabled ? "Bub 已关闭" : knowledgeState.automatic_eligible === false ? "工单尚未完整同步或已停止" : submitting ? "正在提交" : knowledgeState?.busy || view?.current?.status === "running" ? "任务进行中" : view?.waiting_reason || "");
+  const blocked = $derived(!token ? "等待有效运行状态" : !knowledgeState?.enabled ? "Bub 已关闭" : knowledgeState.automatic_eligible === false ? "工单尚未完整同步或已停止" : submitting ? "正在提交" : view?.current?.status === "running" ? "本任务正在执行" : knowledgeState?.busy ? "其他分析任务正在执行，请稍后重试" : view?.waiting_reason || "");
 
   async function load() {
     if (disposed || polling) return;
@@ -76,7 +77,8 @@
 <section class="space-y-4 border-t pt-6" aria-labelledby="advice-title" aria-busy={loading}>
   <header class="flex flex-wrap items-center gap-3">
     <h2 id="advice-title" tabindex="-1" class="text-lg font-semibold">参考排查建议</h2>
-    {#if failed}<Badge variant="destructive">最近生成失败</Badge>
+    {#if view?.task_state}<Badge variant="secondary">{taskLabel(view.task_state)}</Badge>
+    {:else if failed}<Badge variant="destructive">最近生成失败</Badge>
     {:else if view?.current?.status === "running"}<Badge variant="secondary">生成中</Badge>
     {:else if view?.stale}<Badge variant="outline">待更新</Badge>
     {:else if result}<Badge variant="secondary">已生成</Badge>

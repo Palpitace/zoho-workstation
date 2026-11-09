@@ -1,5 +1,5 @@
 # input: stdin 中完整脱敏会话、最小模型配置、Schema 和允许的代理环境。
-# output: 省略无依据的可选设备项，保留其余有据总结；引用失败保留安全位置； 整单事实/引用、安全诊断及无网络代理环境预检，不推断作者身份。
+# output: 结构化整单总结、引用诊断及无响应正文的HTTP错误分类。
 # pos: Go 到无工具 Bub Core 的固定进程入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
 import httpx2
+import re
 import republic
 from bub.core import Agent
 from loguru import logger
@@ -339,6 +340,20 @@ def emit(result: dict[str, Any]) -> int:
     return 0
 
 
+def upstream_failure(error: errors.APIStatusError | errors.APIResponseError) -> dict[str, Any]:
+    # Never stringify the exception: it contains the response body and may contain secrets.
+    result: dict[str, Any] = {"ok": False, "error": "model_response_invalid"}
+    if isinstance(error, errors.APIStatusError):
+        status = error.status_code
+        result["error"] = "model_rate_limited" if status == 429 else "model_http_error"
+        if isinstance(status, int) and 100 <= status <= 599:
+            result["http_status"] = status
+    request_id = getattr(error, "request_id", None)
+    if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,96}", request_id):
+        result["request_id"] = request_id
+    return result
+
+
 def main() -> int:
     # Package exceptions may contain provider bodies or validation input; emit
     # only our own codes, with no traceback or SDK logging handlers.
@@ -373,8 +388,8 @@ def main() -> int:
             result = {"ok": False, "error": "model_timeout"}
         except errors.APIConnectionError:
             result = {"ok": False, "error": "model_connection_failed"}
-        except (errors.APIStatusError, errors.APIResponseError):
-            result = {"ok": False, "error": "model_upstream_failed"}
+        except (errors.APIStatusError, errors.APIResponseError) as error:
+            result = upstream_failure(error)
         except errors.RepublicError:
             result = {"ok": False, "error": "model_request_failed"}
         except ValueError as error:

@@ -1,5 +1,5 @@
 // input: 同源 Go HTTP API 的 JSON 响应及内存中的会话防护令牌。
-// output: 工单/筛选契约、自动退避与提前重试候选、带防护的同源请求能力。
+// output: 同源API类型、统一任务标签及安全错误说明。
 // pos: 浏览器与 Go 的数据边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 export type Attachment = {
   id: string;
@@ -55,7 +55,11 @@ export type TicketRecord = Ticket & {
 
 export type AIKind = "jev" | "bub";
 export type Operation = "sync" | AIKind;
+export type TaskState = "pending" | "running" | "retry_waiting" | "manual" | "waiting" | "success" | "disabled" | "inactive";
+export type BubTask = { ticket_id: string; ticket_number?: string; kind: string; state: TaskState; attempts: number; started_at?: string; elapsed_seconds?: number; last_failed_at?: string; next_retry_at?: string; error?: string; reason?: string };
 export type AIState = {
+  task_state?: TaskState;
+  attempts?: number;
   status: "waiting" | "pending" | "running" | "failed" | "success" | "disabled";
   stale: boolean;
   automatic_eligible?: boolean;
@@ -73,6 +77,7 @@ type AICounts = { pending: number; running: number; failed: number; success: num
 export type RetryCandidate = { ticket_id: string; run_id: number };
 
 export type SystemStatus = {
+  bub_tasks?: { unit: "tasks"; counts: Partial<Record<TaskState, number>>; active: BubTask[]; tasks: BubTask[] };
   retry_candidates?: Record<AIKind, RetryCandidate[]>;
   sync: {
     department_id: string;
@@ -126,7 +131,7 @@ export type AnalysisRun<Result> = {
   result?: Result;
 };
 
-type AnalysisView<Result> = { current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub"; waiting_reason?: string; next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean };
+type AnalysisView<Result> = { task_state?: TaskState; attempts?: number; current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean; waiting_for?: "bub"; waiting_reason?: string; next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean };
 export type JevView = AnalysisView<{ model: string; answers: Record<string, { type: string; choice: string }> }>;
 
 type SummaryFact = { text: string; message_ids: string[] };
@@ -160,6 +165,7 @@ export async function postAction(path: string, token: string, signal: AbortSigna
 
 export function aiLabel(value?: AIState): string {
   if (!value) return "未读取";
+  if (value.task_state) return taskLabel(value.task_state);
   if (value.status === "disabled") return "已关闭";
   if (value.status === "waiting") return "等待总结";
   if (value.status === "running") return value.stale ? "更新中" : "处理中";
@@ -213,8 +219,20 @@ export function syncLabel(record: TicketRecord): string {
   return filterLabel("sync_status", record.sync_status || "");
 }
 
-export function failureHint(value: { next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean }): string {
-  const retry = value.next_retry_at ? `自动重试时间：${dateTime(value.next_retry_at)}。` : "";
+export function failureHint(value: { next_retry_at?: string; last_failed_at?: string; failure_before_start?: boolean; task_state?: TaskState }): string {
+  const retry = value.next_retry_at ? `${value.task_state === "pending" ? "等待调度，原重试计划时间" : "自动重试时间"}：${dateTime(value.next_retry_at)}。` : "";
   const time = value.last_failed_at ? `${value.failure_before_start ? "本次启动前的历史失败" : "最近失败"}：${dateTime(value.last_failed_at)}。` : "";
   return retry + time;
+}
+
+export function taskLabel(state?: TaskState): string {
+  return ({ pending: "待执行", running: "执行中", retry_waiting: "等待重试", manual: "需人工处理", waiting: "等待前置条件", success: "完成", disabled: "已关闭", inactive: "等待同步" } as const)[state || "pending"];
+}
+export function modelFailureHint(error?: string): string {
+  if (!error) return "";
+  if (error.includes("model_rate_limited")) return "上游限流（429），将按退避时间重试。";
+  if (error.includes("model_http_error")) return "上游 HTTP 请求失败，请根据状态码核对服务或配置。";
+  if (error.includes("model_response_invalid")) return "上游响应格式异常，未保存为成功结果。";
+  if (error.includes("model_upstream_failed")) return "历史上游错误未记录具体类别，后续尝试将提供详细诊断。";
+  return "";
 }

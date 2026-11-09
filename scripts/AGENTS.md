@@ -35,3 +35,5 @@ check_detail_ui.py 同样只访问临时静态资源和合成 API，不读取配
 check_knowledge_ui.py 使用相同的静态服务和合成 API，验证文档导入后尚未发布、明确点击才 POST 发布、编辑新草稿保留旧生效版本、建议跳到来源文档块/原工单消息、返回建议与过期步骤隐藏。桌面与 390px 检查无横向溢出或页面脚本错误，截图保存在忽略的 .cache/knowledge-ui。Playwright 仅为开发验收工具，不增加到项目运行时依赖。原有 AI/详情脚本对新知识端点提供关闭状态，原有请求竞争断言继续只覆盖其原职责。
 
 知识增量：smoke_package 在异地解压目录实际调用 documents.py 解析合成 Markdown，并导入 knowledge.py 校验无工具建议 Schema，不访问模型；同时继续验证 native SDK 库、代理和本机启动。
+
+Issue #9：check_ai_ui 复用现有浏览器验证，增加Bub活动任务链接/耗时/重试次数、429提示，以及其他工单占用槽时本工单仍显示等待重试的回归。全部合成数据，无真实服务调用。

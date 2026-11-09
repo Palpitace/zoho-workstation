@@ -1,5 +1,5 @@
 // input: 工单、能力、输入 Hash、版本、模型标识及结构化分析结果。
-// output: 总结/评估/案例/建议的版本记录、持续退避、成功结果保留和持久调用计数。
+// output: 版本历史、持久尝试次数、统一任务状态与持续退避。
 // pos: SQLite AI 结果与调用计数边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -29,6 +29,9 @@ type AnalysisRun struct {
 	Error         string          `json:"error,omitempty"`
 }
 type AnalysisView struct {
+	Active       *AnalysisRun `json:"-"`
+	TaskState    string       `json:"task_state"`
+	Attempts     int          `json:"attempts"`
 	Current      *AnalysisRun `json:"current"`
 	Success      *AnalysisRun `json:"success"`
 	Stale        bool         `json:"stale"`
@@ -134,7 +137,14 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 			return view, err
 		}
 		r.Result = json.RawMessage(body)
+		if r.Status == "running" && view.Active == nil {
+			copy := r
+			view.Active = &copy
+		}
 		matches := r.InputHash == req.InputHash && r.SchemaVersion == req.SchemaVersion && r.RequestedModel == req.RequestedModel
+		if matches && r.Status != "invalid" {
+			view.Attempts++
+		}
 		if matches && r.Status == "failed" {
 			failures++
 			if view.LastFailedAt == "" {
@@ -153,6 +163,22 @@ func (s *Store) Analysis(ctx context.Context, req AnalysisRequest) (AnalysisView
 	}
 	if view.Current != nil && view.Current.Status == "failed" && (view.Success == nil || view.Stale) {
 		view.NextRetryAt = retryTime(view.LastFailedAt, failures).Format(time.RFC3339Nano)
+	}
+	view.TaskState = "pending"
+	if view.Success != nil && !view.Stale {
+		view.TaskState = "success"
+	}
+	if view.Current != nil {
+		switch view.Current.Status {
+		case "running":
+			view.TaskState = "running"
+		case "invalid":
+			view.TaskState = "manual"
+		case "failed":
+			if at, e := time.Parse(time.RFC3339Nano, view.NextRetryAt); e == nil && time.Now().Before(at) {
+				view.TaskState = "retry_waiting"
+			}
+		}
 	}
 	return view, rows.Err()
 }

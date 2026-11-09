@@ -1,7 +1,7 @@
 // input: 同源知识 API、内存中的 CSRF 令牌和用户选择的文件或草稿。
-// output: 知识来源、独立建议状态及受保护的导入/发布请求。
+// output: 知识来源、独立建议任务状态及受保护的导入/发布请求。
 // pos: 知识界面与 Go 的契约边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
-import type { AnalysisRun } from "./api";
+import type { AnalysisRun, TaskState } from "./api";
 
 export type KnowledgeBlock = { id: string; text: string };
 export type KnowledgeEntry = {
@@ -18,6 +18,7 @@ export type AdviceData = {
   missing_information: string[]; conflicts: string[];
 };
 type KnowledgeRunView<Result> = {
+  task_state?: TaskState; attempts?: number;
   current: AnalysisRun<Result> | null; success: AnalysisRun<Result> | null; stale: boolean;
   waiting_reason?: string; next_retry_at?: string; last_failed_at?: string;
 };

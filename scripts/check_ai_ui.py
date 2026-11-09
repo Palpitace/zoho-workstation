@@ -1,5 +1,5 @@
 # input: 已构建 web/dist、Playwright/Chromium 和脚本内合成 API 响应。
-# output: 总数不变的逐票刷新、隐藏/恢复、请求竞争及人工恢复确认的浏览器回归证据。
+# output: Bub活动/重试状态一致性、逐票刷新及恢复确认的浏览器证据。
 # pos: 无真实服务调用的 AI 界面验收。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import copy
 import functools
@@ -60,6 +60,13 @@ def main():
         elif path.endswith("/knowledge"):
             empty = {"current": None, "success": None, "stale": False}
             route.fulfill(json={"case": empty, "advice": empty, "enabled": False, "busy": False})
+        elif path == "/api/tickets/1/analysis":
+            route.fulfill(json={"jev": {"current": None, "success": None, "stale": False}, "bub": {
+                "current": {"id": 2, "status": "failed", "error": "Bub: model_rate_limited; HTTP 429; request_id=req-safe"},
+                "success": None, "stale": False, "task_state": "retry_waiting", "attempts": 2,
+                "next_retry_at": "2026-11-09T12:00:00Z"}})
+        elif path == "/api/tickets/1":
+            route.fulfill(json={"id":"1", "subject":"Synthetic ticket 1", "complete":True, "messages":[], "status":"Open"})
         elif path == "/api/status":
             route.fulfill(json=status)
         elif path == "/api/tickets":
@@ -137,6 +144,23 @@ def main():
             page.get_by_role("button", name="确认重试", exact=True).click()
             expect(page.get_by_text("已受理 1 张 Bub 重试，每张只执行一次。", exact=True)).to_be_visible()
             assert state["posts"] == [{"candidates": [{"ticket_id": "1", "run_id": 2}]}]
+            status["runtime"]["bub_running"] = True
+            status["bub_tasks"] = {"unit":"tasks", "counts":{"pending":1,"running":1,"retry_waiting":1,"manual":0,"waiting":0},
+                "active":[{"ticket_id":"2","ticket_number":"456","kind":"case","state":"running","started_at":"2026-11-09T11:00:00Z","elapsed_seconds":15}],
+                "tasks":[{"ticket_id":"1","ticket_number":"123","kind":"bub","state":"retry_waiting","attempts":2,"error":"Bub: model_rate_limited; HTTP 429; request_id=req-safe","next_retry_at":"2026-11-09T12:00:00Z"}]}
+            page.get_by_role("button", name="刷新数据", exact=True).click()
+            panel=page.locator("section[aria-labelledby='bub-tasks-title']")
+            expect(panel.get_by_text("Bub 任务", exact=True)).to_be_visible()
+            expect(panel.get_by_role("link",name="工单 #456",exact=True)).to_have_attribute("href", "#/tickets/2")
+            expect(panel.get_by_text("已运行 15 秒", exact=False)).to_be_visible()
+            panel.locator("summary").click()
+            expect(panel.get_by_text("已尝试 2 次",exact=False)).to_be_visible()
+            panel.get_by_role("link",name="工单 #123",exact=True).click()
+            summary=page.locator("section[aria-labelledby='bub-title']")
+            expect(summary.get_by_text("等待重试",exact=True)).to_be_visible()
+            expect(summary.get_by_text("其他分析任务正在执行",exact=False)).to_be_visible()
+            expect(summary.get_by_text("最近总结失败",exact=True)).to_have_count(0)
+            expect(summary.get_by_text("上游限流（429）",exact=False)).to_be_visible()
             assert not errors, errors
             if screenshot := os.environ.get("AI_UI_SCREENSHOT"):
                 page.screenshot(path=screenshot, full_page=True)

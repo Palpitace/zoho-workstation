@@ -17,7 +17,7 @@
 | bub.go | Python 边界 | 固定入口、最小代理环境、安全错误分类及 v6 三类事实/来源二次校验 |
 | bub_test.go | 摘要契约测试 | 可空分类/角色来源校验、真实子进程模拟代理与凭据环境隔离 |
 
-Bub 使用 PythonExecutable 选择固定本地解释器与 python/main.py，无 Shell 拼接。stdin 仅传完整脱敏会话、Bub 专用模型配置及 Schema；子进程环境保留固定 PATH/编码/不写缓存，并仅按名称继承非空 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 及其小写形式，不继承 Zoho/Jev/Bub Key 或其他父进程变量。代理值可能含认证信息，禁止日志输出；大小写优先级和 NO_PROXY 行为由锁定的 SDK HTTP 客户端处理。90 秒上限、stdout 1 MiB 上限、stderr 不回显；失败不清已有结果。连接失败、超时、上游错误分别透传固定 model_connection_failed、model_timeout、model_upstream_failed，不输出异常原文。结构校验能拒绝未知引用、错角色或未发客服消息，不能证明模型自由文本事实正确。
+Bub 使用 PythonExecutable 选择固定本地解释器与 python/main.py，无 Shell 拼接。stdin 仅传完整脱敏会话、Bub 专用模型配置及 Schema；子进程环境保留固定 PATH/编码/不写缓存，并仅按名称继承非空 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 及其小写形式，不继承 Zoho/Jev/Bub Key 或其他父进程变量。代理值可能含认证信息，禁止日志输出；大小写优先级和 NO_PROXY 行为由锁定的 SDK HTTP 客户端处理。90 秒上限、stdout 1 MiB 上限、stderr 不回显；失败不清已有结果。连接失败、超时分别透传固定 model_connection_failed、model_timeout；上游错误分为 model_rate_limited、model_http_error、model_response_invalid（旧 model_upstream_failed 兼容读取），不输出异常原文。结构校验能拒绝未知引用、错角色或未发客服消息，不能证明模型自由文本事实正确。
 
 代理回归使用本机 CONNECT 模拟代理和真实 Go→Python→Bub/Republic 路径，单次子进程验证全部 8 项白名单原值继承、实际 CONNECT 路由及父环境凭据隔离，不重复验证 SDK 的大小写优先级；需要先执行 make setup 安装固定 Python 环境，不读取 .env 或访问真实模型。错误分类另由 Python SDK Mock 验证；不新增模型预算、配置项或依赖。
 
@@ -57,3 +57,9 @@ Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索�
 文档使用 documents.py 本地解析，未发布前不发送模型。单文件 10 MiB、正文 256 KiB、每块 8 KiB、最多 4096 块；PDF 页和 DOCX 段落/表格及 Markdown 行位置保留。扫描页、图像或无法提取的内容显式拒绝，不做 OCR。原件由 app 私有保存，提取内容再脱敏。详情见 [知识使用说明](../../docs/knowledge.md)。
 
 知识增量验证中，当前容器实测单独 SDK 导入约 16.7 秒，旧代理集成测试的 20 秒总 context 出现无 CONNECT 的超时。测试等待提高为 60 秒，仍断言一次真实本地 CONNECT 和完整凭据隔离；业务超时/重试未改变，不降低语义断言。
+
+| model_error.go | 安全诊断 | 总结/案例/建议共用 HTTP 类别、状态及受限请求ID |
+
+Issue #9：model_rate_limited（429）、model_http_error 与 model_response_invalid 分开透传。HTTP状态限定100–599，请求ID限定96字符字母数字下划线短横线；不读取异常正文和任意响应头。错误文本可由store持久保存，结构化日志取同一安全字段。旧 model_upstream_failed 仍可读取，但不能恢复其未记录的HTTP状态。
+
+校验失败仍保留安全请求ID及原有栏目诊断；结构化日志中的error_category保持固定类别。诊断字符白名单只允许已知路径，不记录模型原文。

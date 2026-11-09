@@ -1,5 +1,5 @@
 # input: 合成会话、模型结果、SDK 模拟错误及隔离代理/缺依赖环境。
-# output: 可选设备信息省略后其余总结保留、引用失败栏目/条目位置； 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断的证据。
+# output: 429/HTTP/格式异常区分、敏感内容隔离和总结引用契约证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -123,7 +123,9 @@ class SummaryContractTest(unittest.TestCase):
         for error, expected in (
             (httpx2.ConnectError("synthetic-private-proxy"), "model_connection_failed"),
             (httpx2.ConnectTimeout("synthetic-private-proxy"), "model_timeout"),
-            (httpx2.Response(503, text="synthetic-private-provider-body"), "model_upstream_failed"),
+            (httpx2.Response(503, text="synthetic-private-provider-body"), "model_http_error"),
+            (httpx2.Response(429, text="synthetic-private-provider-body", headers={"x-request-id": "req-safe-123"}), "model_rate_limited"),
+            (httpx2.Response(200, headers={"content-type": "text/event-stream"}, text="data: broken-json\n\n"), "invalid_summary"),
         ):
             with self.subTest(expected=expected):
                 calls = []
@@ -152,8 +154,20 @@ class SummaryContractTest(unittest.TestCase):
                     asyncio.run(client.aclose())
                 self.assertEqual(status, 1)
                 self.assertEqual(len(calls), 1)
-                self.assertEqual(json.loads(output.getvalue()), {"ok": False, "error": expected})
+                result = json.loads(output.getvalue())
+                self.assertEqual(result["error"], expected)
+                self.assertFalse(result["ok"])
+                if isinstance(error, httpx2.Response) and error.status_code != 200:
+                    self.assertEqual(result["http_status"], error.status_code)
+                if expected == "model_rate_limited":
+                    self.assertEqual(result["request_id"], "req-safe-123")
                 self.assertNotIn("synthetic-private", output.getvalue() + logs.getvalue())
+
+    def test_upstream_response_errors_never_expose_body_or_headers(self):
+        error = main.errors.APIResponseError("synthetic-private-body", headers={"x-request-id": "req-safe", "authorization": "synthetic-private-key"})
+        self.assertEqual(main.upstream_failure(error), {"ok": False, "error": "model_response_invalid", "request_id": "req-safe"})
+        error = main.errors.APIStatusError(429, "synthetic-private-body", headers={"x-request-id": "unsafe/private"})
+        self.assertEqual(main.upstream_failure(error), {"ok": False, "error": "model_rate_limited", "http_status": 429})
 
     def test_optional_sections_keep_role_evidence(self):
         snapshot = Snapshot.model_validate({

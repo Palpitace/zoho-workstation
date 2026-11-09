@@ -90,3 +90,9 @@ GET `/api/knowledge?q=&status=`、`/api/knowledge/:id`；POST `/api/knowledge/im
 GET `/api/tickets/:id/knowledge` 独立返回 case/advice 状态和来源快照，POST 原分析路径的 `/advice` 可重跑。所有操作复用本机 Host/Origin/CSRF。SOP 草稿不影响当前建议，发布替代/停用后相应建议立即标过期，随后自动更新；事实总结、Jev 和同步不受知识失败影响。知识正文仅作数据，不增加运行时工具或自主回复。
 
 知识列表 API 只返回条目元信息，blocks/message_ids 置为空数组，详情端点按需读取完整证据，避免每次轮询发送全部文档正文；存储/检索内容保持不变。
+
+## Issue #9：Bub 任务诊断
+
+`/api/status.bub_tasks` 按任务统计 pending/running/retry_waiting/manual/waiting，覆盖总结、案例、建议；active 返回工单号、类型、开始时间及运行秒数，tasks 返回未完成项、尝试次数、上次失败与重试时间。状态由同一次持久历史读取派生，旧输入仍执行时不丢失活动记录，不创建第二套队列。列表、详情与知识 API 共用 task_state；全局并发占用只说明其他任务正在执行，不声称当前工单运行。失败日志保留安全类别、HTTP状态、请求ID与run_id，不记录异常正文。
+
+| tasks.go | 状态派生 | 统一任务状态、活动任务及分类积压，无新队列 |

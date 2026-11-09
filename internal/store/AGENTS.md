@@ -60,3 +60,5 @@ SOP 导入始终为 draft，只有 PublishKnowledge 显式操作生效。Replace
 简化检查：只新增一张正在使用的知识版本表；不增加向量服务、发布队列、抽象仓储或重复全文副本。版本发布与查询由现有 SQLite 事务及 Go 词面排序完成。
 
 知识派生 SOP 可保留 source_ticket_id/message_ids 以回到原案例证据，人工发布后独立生效。来源签名由 app 包含当前输入/Schema/模型及案例内容；存储不把调用 ID 当成知识版本。知识块最多 4096 个，总文本仍有界。ai_runs 的 kind 允许 case/advice，复用原缓存、重试和重启恢复，所有真实请求继续计入持久计数。
+
+Issue #9：AnalysisView 增加 task_state/attempts，尝试次数按当前输入/Schema/模型计算且不包含本地 invalid；冷却期 retry_waiting，到期 pending，实际 running 才显示执行中，invalid 为 manual。Active 仅内部使用，来自同次历史查询，保留旧输入仍在执行的记录。继续使用 ai_runs，无迁移；安全HTTP错误文本随失败保存，重启保留，旧成功不清空。

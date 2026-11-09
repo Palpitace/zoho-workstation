@@ -1,5 +1,5 @@
 // input: 完整脱敏会话、显式配置、固定 Python 环境和代理白名单。
-// output: 安全栏目/条目诊断； 整单汇总校验、离线代理 transport 检查及安全环境/模型错误。
+// output: 白名单HTTP诊断、整单汇总校验及安全环境/模型错误。
 // pos: 无 Shell 的 Python 子进程与 Go 结果验证边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -139,6 +139,7 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 	command.Stderr = io.Discard
 	processErr := command.Run()
 	var envelope struct {
+		HTTPStatus    int             `json:"http_status"`
 		OK            bool            `json:"ok"`
 		Result        json.RawMessage `json:"result"`
 		ReturnedModel string          `json:"returned_model"`
@@ -170,8 +171,8 @@ func Bub(ctx context.Context, cfg config.Model, input json.RawMessage) (json.Raw
 			}
 		}
 		switch envelope.Error {
-		case "invalid_input", "model_timeout", "model_connection_failed", "model_upstream_failed", "model_request_failed", "invalid_summary", "summary_failed", "proxy_dependency_missing", "proxy_configuration_invalid", "python_environment_invalid":
-			return nil, envelope.ReturnedModel, errors.New("Bub: " + envelope.Error + diagnostic)
+		case "model_rate_limited", "model_http_error", "model_response_invalid", "invalid_input", "model_timeout", "model_connection_failed", "model_upstream_failed", "model_request_failed", "invalid_summary", "summary_failed", "proxy_dependency_missing", "proxy_configuration_invalid", "python_environment_invalid":
+			return nil, envelope.ReturnedModel, fmt.Errorf("%w%s", modelError(envelope.Error, envelope.HTTPStatus, envelope.RequestID), diagnostic)
 		default:
 			return nil, "", errors.New("Bub did not return a successful structured result")
 		}

@@ -1,5 +1,5 @@
 <!-- input: 浏览器导航、Go 查询/操作 API 及会话防护令牌。 -->
-<!-- output: 工单/知识库导航、组合筛选、来源定位和可见页面定期刷新。 -->
+<!-- output: 工单/知识/状态页面编排，区分当前任务与全局占用。 -->
 <!-- pos: 前端导航与异步数据编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onMount } from "svelte";
@@ -52,12 +52,13 @@
   function blocked(kind: Operation): string {
     if (!status?.csrf_token || statusError) return "等待有效运行状态";
     if (submitting[kind]) return "正在提交请求";
-    if (status.runtime?.[`${kind}_running`]) return "任务进行中";
+    if (kind === "sync" && status.runtime?.sync_running) return "同步进行中";
     if (kind === "sync") return "";
     if (!status[`${kind}_enabled`]) return "能力已关闭";
     if (!detail || detail.pending) return "工单尚未保存";
     if (kind === "jev" && jev?.waiting_for === "bub") return "等待当前会话的 Bub 总结";
-    if ((kind === "jev" ? jev : bub)?.current?.status === "running") return "任务进行中";
+    if ((kind === "jev" ? jev : bub)?.current?.status === "running") return "本任务正在执行";
+    if (status.runtime?.[`${kind}_running`]) return "其他分析任务正在执行，请稍后重试";
     return "";
   }
   const controls = $derived({

@@ -1,10 +1,10 @@
 <!-- input: Bub 结果、当前消息、操作反馈和重新总结回调。 -->
-<!-- output: 重试耗尽/失败时间提示； 整单三段综合总结、未知作者原文标记、引用定位及返回总结入口。 -->
+<!-- output: 与列表一致的任务状态、错误诊断、事实总结及证据跳转。 -->
 <!-- pos: 工单详情中的 Bub 总结展示与证据定位。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
-  import { failureHint, type BubView, type Message, type ActionFeedback } from "./api";
+  import { taskLabel, modelFailureHint, failureHint, type BubView, type Message, type ActionFeedback } from "./api";
 
   let { view, messages, loading, error, control, onRerun }: { view: BubView | null; messages: Message[]; loading: boolean; error: string; control: ActionFeedback; onRerun: () => void } = $props();
   const savedSummary = $derived(view?.success?.result?.summary);
@@ -52,7 +52,8 @@
 <section aria-labelledby="bub-title" class="space-y-5 border-t pt-6" aria-busy={loading}>
   <header class="flex flex-wrap items-center gap-3">
     <h2 id="bub-title" tabindex="-1" class="text-lg font-semibold">Bub 工单汇总</h2>
-    {#if failed}<Badge variant="destructive">{view?.current?.status === "invalid" ? "无法总结" : "最近总结失败"}</Badge>
+    {#if view?.task_state}<Badge variant={view.task_state === "manual" ? "destructive" : "secondary"}>{taskLabel(view.task_state)}</Badge>
+    {:else if failed}<Badge variant="destructive">{view?.current?.status === "invalid" ? "无法总结" : "最近总结失败"}</Badge>
     {:else if view?.current?.status === "running"}<Badge variant="secondary">总结中</Badge>
     {:else if view?.success}<Badge variant="secondary">已有总结</Badge>
     {:else if !loading && !error}<Badge variant="outline">待总结</Badge>{/if}
@@ -64,6 +65,8 @@
   {#if control.notice}<p role="status" class="text-sm text-muted-foreground">{control.notice}</p>{/if}
   {#if loading}<p role="status" class="text-sm text-muted-foreground">正在读取总结…</p>{/if}
   {#if error}<p role="alert" class="text-sm text-destructive">总结暂不可读：{error}</p>{/if}
+  {#if view?.attempts}<p class="text-xs text-muted-foreground">当前版本已尝试 {view.attempts} 次</p>{/if}
+  {#if modelFailureHint(view?.current?.error)}<p class="text-sm text-muted-foreground">{modelFailureHint(view?.current?.error)}</p>{/if}
   {#if failed && view && failureHint(view)}<p class="text-sm text-muted-foreground">{failureHint(view)}</p>{/if}
   {#if view?.current?.error?.includes("invalid_summary")}<p class="text-sm text-destructive">总结证据校验失败，请核对提示后重试。</p>{/if}
   {#if view?.current?.error}<p role="alert" class="text-sm break-words text-destructive">{view.current.error}</p>{/if}

@@ -1,5 +1,5 @@
 // input: 当前完整工单、成功事实总结、本地案例与经确认发布的 SOP。
-// output: 独立知识任务输入、来源版本检查和自动案例持久化。
+// output: 当前案例签名、有效来源与共享任务状态、独立建议输入及自动案例保存。
 // pos: 事实总结之外的知识/建议编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -154,6 +154,7 @@ func (a *App) knowledgeView(ctx context.Context, record store.Record, kind strin
 		}
 		out.WaitingReason = err.Error()
 	}
+	out.TaskState = a.taskState(record, kind, out)
 	return out, nil
 }
 

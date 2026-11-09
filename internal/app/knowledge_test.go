@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成证据、固定 Python 进程替身和受保护 HTTP 请求。
-// output: 自动案例/建议、草稿隔离、版本失效、来源回溯及与 Jev 分离的集成证据。
+// output: 知识边界及Bub列表/详情/运行状态一致、重启恢复的集成证据。
 // pos: 知识链路端到端回归。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -328,5 +328,66 @@ func TestKnowledgeDocumentImportIsLocalDraft(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join("data", "knowledge", entry.SourceHash+".md")); err != nil {
 		t.Fatal("original document not retained")
+	}
+}
+
+func TestBubTaskStatusMatchesDetailAndSurvivesRecovery(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "tasks.db"), "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cfg := config.Config{Port: "8080", SyncInterval: time.Hour, Bub: config.Model{Enabled: true, Name: "mock"}}
+	service, err := New(cfg, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Reserve(ctx, []string{"1"})
+	snap := ticket.Snapshot{ID: "1", DepartmentID: "7", Complete: true, Subject: "synthetic", Messages: []ticket.Message{{ID: "m", Role: "customer", Body: "Help"}}}
+	db.Save(ctx, ticket.RawSnapshot{Ticket: json.RawMessage(`{"ticketNumber":"123"}`)}, snap)
+	record, _ := db.Get(ctx, "1")
+	req, _, err := requestForRecord(ctx, db, cfg, record, "bub", DevelopmentRound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := service.Handler()
+	check := func(want string, running int) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "http://localhost:8080/api/status", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatal(w.Body.String())
+		}
+		var response struct {
+			Tasks bubTasks `json:"bub_tasks"`
+		}
+		json.Unmarshal(w.Body.Bytes(), &response)
+		if response.Tasks.Counts[want] != 1 || len(response.Tasks.Active) != running {
+			t.Fatalf("unexpected tasks: %s", w.Body.String())
+		}
+		states, views, e := service.recordViews(ctx, record)
+		if e != nil || views["bub"].TaskState != want || states["bub"].TaskState != want {
+			t.Fatalf("states disagree: %v %v %v", states, views, e)
+		}
+		if running == 1 && response.Tasks.Active[0].TicketNumber != "123" {
+			t.Fatal("missing ticket number")
+		}
+	}
+	check("pending", 0)
+	run, _, _ := db.StartAnalysis(ctx, req, false)
+	check("running", 1)
+	db.FinishAnalysis(ctx, run.ID, "", nil, fmt.Errorf("Bub: model_rate_limited; HTTP 429; request_id=req-safe"))
+	check("retry_waiting", 0)
+	run, _, _ = db.StartAnalysis(ctx, req, true)
+	check("running", 1)
+	db.RecoverAnalysis(ctx)
+	check("retry_waiting", 0)
+	run, _, _ = db.StartAnalysis(ctx, req, true)
+	db.FinishAnalysis(ctx, run.ID, "mock", json.RawMessage(`{"summary":{"device_info":[],"customer_feedback":[],"support_responses":[]}}`), nil)
+	states, _, _ := service.recordViews(ctx, record)
+	if states["bub"].TaskState != "success" || states["bub"].Attempts != 3 {
+		t.Fatalf("success lost: %v", states)
 	}
 }

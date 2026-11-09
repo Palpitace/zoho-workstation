@@ -7,4 +7,4 @@
 | 名称 | 地位 | 功能 |
 | --- | --- | --- |
 | AGENTS.md | 目录约定 | 构建配置职责 |
-| workflows | CI 流程 | 原生三平台测试和便携包上传 |
+| workflows | CI 流程 | Windows 原生测试和便携包上传，macOS 暂停 |

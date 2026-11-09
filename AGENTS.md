@@ -102,3 +102,5 @@ Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`�
 日志固定在 logs/workstation.log，slog 同时输出终端；lumberjack v2.2.1 实现 10 MiB/3 备份/7 天轮转，启动错误也留存。密钥、正文和 Python 原始 stderr 不写日志。Windows 使用 LockFileEx，Unix 使用 Flock；进程退出释放操作锁。
 
 历史失败恢复：自动失败上限不因升级/重启重置。运行状态可确认固定失败版本，每票补执行一次；仍使用原调度器和持久历史，未开始的确认不跨重启保留。接口与约束见 internal/app/AGENTS.md，用户操作见 docs/downloads.md。
+
+Issue #9：运行状态页提供Bub总结/案例/建议的任务积压、活动工单及持久重试诊断；列表和详情共用任务状态。上游HTTP和响应格式异常分别诊断，禁止日志记录供应商响应正文；细节见 internal/app/AGENTS.md。

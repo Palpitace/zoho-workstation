@@ -1,11 +1,11 @@
 <!-- input: Go 同步/AI 状态、精确恢复候选、会话令牌及刷新回调。 -->
-<!-- output: 运行状态、等待自动重试数量及经确认的一次性恢复入口。 -->
+<!-- output: Bub活动任务、按任务分类积压及持久失败/重试详情。 -->
 <!-- pos: 运行状态页面。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。 -->
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Badge } from "$lib/components/ui/badge/index.js";
-  import { dateTime, postAction, type AIKind, type RetryCandidate, type SystemStatus } from "./api";
+  import { taskLabel, modelFailureHint, dateTime, postAction, type AIKind, type RetryCandidate, type SystemStatus } from "./api";
   let { status, loading, error, onRefresh }: { status: SystemStatus | null; loading: boolean; error: string; onRefresh: () => Promise<void> } = $props();
   let confirmation = $state<{ kind: AIKind; candidates: RetryCandidate[] } | null>(null);
   let submitting = $state(false);
@@ -30,6 +30,8 @@
       submitting = false;
     }
   }
+  const taskKinds: Record<string, string> = { bub: "工单总结", case: "案例提取", advice: "处理建议" };
+  const taskCounts = ["pending", "running", "retry_waiting", "manual", "waiting"] as const;
   const kinds = ["jev", "bub"] as const;
   const counts = [["pending", "待处理"], ["running", "处理中"], ["failed", "失败"], ["success", "成功"], ["stale", "过期"]] as const;
 </script>
@@ -74,6 +76,34 @@
           <div><dt class="text-muted-foreground">当前轮次请求</dt><dd class="mt-1 tabular-nums">{status.budget.round} 次</dd></div>
         </dl>
         <p class="text-xs text-muted-foreground">请求额度限制已关闭。失败请求与重试仍计入统计，刷新页面或重启服务不会清零。</p>
+      </section>
+    {/if}
+    {#if status.bub_tasks}
+      <section class="space-y-4 rounded-lg border p-5" aria-labelledby="bub-tasks-title">
+        <h2 id="bub-tasks-title" class="font-semibold">Bub 任务</h2>
+        <p class="text-xs text-muted-foreground">按任务计数；同一工单可包含总结、案例提取和建议。</p>
+        <dl class="grid grid-cols-2 gap-4 sm:grid-cols-5">
+          {#each taskCounts as state}<div><dt class="text-xs text-muted-foreground">{taskLabel(state)}</dt><dd>{status.bub_tasks.counts[state] ?? 0}</dd></div>{/each}
+        </dl>
+        {#each status.bub_tasks.active as task}
+          <div class="rounded border p-3 text-sm" aria-label="正在执行的 Bub 任务">
+            <a class="underline" href={`#/tickets/${encodeURIComponent(task.ticket_id)}`}>工单 #{task.ticket_number || task.ticket_id}</a> · {taskKinds[task.kind] || task.kind} · 执行中
+            <p class="mt-1 text-muted-foreground">开始：{dateTime(task.started_at)} · 已运行 {task.elapsed_seconds ?? 0} 秒</p>
+          </div>
+        {:else}<p class="text-sm text-muted-foreground">当前没有正在执行的 Bub 任务</p>{/each}
+        <details><summary class="cursor-pointer text-sm">查看待处理与重试任务（{status.bub_tasks.tasks.length}）</summary>
+          <ul class="mt-3 max-h-96 divide-y overflow-auto text-sm">
+            {#each status.bub_tasks.tasks as task}
+              <li class="space-y-1 py-3">
+                <a class="underline" href={`#/tickets/${encodeURIComponent(task.ticket_id)}`}>工单 #{task.ticket_number || task.ticket_id}</a> · {taskKinds[task.kind] || task.kind} · {taskLabel(task.state)}
+                <p>已尝试 {task.attempts} 次{task.last_failed_at ? ` · 最近失败：${dateTime(task.last_failed_at)}` : ""}</p>
+                {#if task.next_retry_at}<p>{task.state === "retry_waiting" ? "下次重试" : "重试到期时间"}：{dateTime(task.next_retry_at)}</p>{/if}
+                {#if task.reason}<p class="text-muted-foreground">{task.reason}</p>{/if}
+                {#if task.error}<p class="break-words text-destructive">{modelFailureHint(task.error)} {task.error}</p>{/if}
+              </li>
+            {/each}
+          </ul>
+        </details>
       </section>
     {/if}
     <section aria-labelledby="capabilities-title">

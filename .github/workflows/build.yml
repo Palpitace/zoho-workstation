@@ -1,5 +1,5 @@
 # input: main 推送、手动触发或 PR，以及锁定的应用依赖。
-# output: 三平台合成回归与原生解压验收后的便携包和校验和，不含用户数据。
+# output: Windows x64 合成回归与原生解压验收后的便携包；macOS 暂停。
 # pos: GitHub Actions 构建流程。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 name: Build desktop packages
 on:
@@ -20,10 +20,11 @@ jobs:
         include:
           - os: windows-2025
             name: windows-x64
-          - os: macos-15-intel
-            name: macos-x64
-          - os: macos-15
-            name: macos-arm64
+          # 暂停 macOS 构建，当前仅在 Windows 验收；恢复时取消以下注释。
+          # - os: macos-15-intel
+          #   name: macos-x64
+          # - os: macos-15
+          #   name: macos-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     defaults:

@@ -1,5 +1,5 @@
 // input: 同源 HTTP 查询/操作、后台状态和 SQLite 工单/分析记录。
-// output: 本机查询、受保护的知识/恢复操作、共享 Bub 运行状态及独立分析结果。
+// output: 统一逐票任务状态、Bub积压/活动诊断及受保护的本机查询操作。
 // pos: Gin 管理界面 API 与静态资源边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -19,6 +19,8 @@ import (
 )
 
 type AIStatus struct {
+	TaskState          string `json:"task_state"`
+	Attempts           int    `json:"attempts"`
 	Status             string `json:"status"`
 	Stale              bool   `json:"stale"`
 	AutomaticEligible  bool   `json:"automatic_eligible"`
@@ -129,6 +131,10 @@ func (a *App) recordViews(ctx context.Context, record store.Record) (map[string]
 				s.Category = result.Answers["category"].Choice
 			}
 		}
+		v := views[kind]
+		v.TaskState = a.taskState(record, kind, v)
+		views[kind] = v
+		s.TaskState, s.Attempts = v.TaskState, v.Attempts
 		summaries[kind] = s
 	}
 	if summaries["jev"].Status == "waiting" {
@@ -263,6 +269,7 @@ func (a *App) status(c *gin.Context) {
 		apiError(c, 500, "cannot read tickets")
 		return
 	}
+	tasks := bubTasks{Unit: "tasks", Counts: map[string]int{"pending": 0, "running": 0, "retry_waiting": 0, "manual": 0, "waiting": 0}, Active: []taskItem{}, Tasks: []taskItem{}}
 	totals := map[string]*counts{"jev": {}, "bub": {}}
 	eligibleCount, stoppedCount := 0, 0
 	candidates := map[string][]RetryCandidate{"bub": {}, "jev": {}}
@@ -285,12 +292,27 @@ func (a *App) status(c *gin.Context) {
 			apiError(c, 500, "cannot read analysis status")
 			return
 		}
+		if !record.Pending {
+			for _, kind := range []string{"bub", "case", "advice"} {
+				view := views["bub"]
+				if kind != "bub" {
+					view, err = a.knowledgeView(ctx, record, kind)
+					if err != nil {
+						apiError(c, 500, "cannot read Bub task status")
+						return
+					}
+				}
+				if (a.automaticallyEligible(record) && a.cfg.Bub.Enabled) || view.Active != nil {
+					addTask(&tasks, record, kind, view)
+				}
+			}
+		}
 		for kind, s := range summaries {
 			n := totals[kind]
-			switch s.Status {
+			switch s.TaskState {
 			case "success":
 				n.Success++
-			case "failed":
+			case "manual", "retry_waiting":
 				n.Failed++
 			case "running":
 				n.Running++
@@ -298,7 +320,7 @@ func (a *App) status(c *gin.Context) {
 				n.Pending++
 			}
 			if s.Status == "failed" {
-				if s.NextRetryAt != "" {
+				if s.TaskState == "retry_waiting" {
 					n.RetryWaiting++
 				}
 				if s.AutomaticEligible && views[kind].Current != nil && views[kind].Current.Status == "failed" {
@@ -310,10 +332,11 @@ func (a *App) status(c *gin.Context) {
 			}
 		}
 	}
+
 	a.mu.Lock()
 	runtime := gin.H{"sync_start_time": a.cfg.SyncStartTime.Format(time.RFC3339), "next_sync_at": a.nextSync.UTC().Format(time.RFC3339), "last_sync_batch": a.lastSyncResult, "stopped_count": stoppedCount, "started_at": a.startedAt, "recovery_pending": map[string]int{"bub": len(a.recovery["bub"]), "jev": len(a.recovery["jev"])}, "sync_running": a.busy["sync"], "jev_running": a.busy["jev"], "bub_running": a.busy["bub"] || a.busy["case"] || a.busy["advice"], "case_running": a.busy["case"], "advice_running": a.busy["advice"], "automatic": a.started && !a.closed, "ai_scope": "all_synced", "ai_scope_count": eligibleCount, "sync_interval_seconds": int(a.cfg.SyncInterval / time.Second), "sync_batch_size": a.cfg.SyncBatchSize, "sync_concurrency": a.cfg.SyncConcurrency, "last_error": map[string]string{"sync": a.lastError["sync"], "jev": a.lastError["jev"], "bub": a.lastError["bub"], "analysis": a.lastError["analysis"], "case": a.lastError["case"], "advice": a.lastError["advice"]}}
 	a.mu.Unlock()
-	c.JSON(200, gin.H{"retry_candidates": candidates, "sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round}})
+	c.JSON(200, gin.H{"bub_tasks": tasks, "retry_candidates": candidates, "sync": syncState, "jev_enabled": a.cfg.Jev.Enabled, "bub_enabled": a.cfg.Bub.Enabled, "wecom_enabled": false, "csrf_token": a.csrf, "runtime": runtime, "ai": totals, "budget": gin.H{"total": budget.Total, "round": budget.Round}})
 }
 
 func apiError(c *gin.Context, status int, message string) { c.JSON(status, gin.H{"error": message}) }

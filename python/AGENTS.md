@@ -13,7 +13,7 @@ Prompt 保留客户明确诉求、风险报告及近期情绪的明确表达，�
 成功输出 `{ok:true,result,returned_model,request_id,usage}`；失败输出 `{ok:false,error:<固定错误码>,diagnostics?:[{loc,type,code}]}` 并以非零状态退出。
 已经取得供应商 Response 时，即使本地结构、引用或截断校验失败，错误输出也保留 `returned_model`、`request_id` 和 `usage`，不包含原文；认证/网络失败尚无 Response 时这些信息未知，不用请求模型补造。
 stdout 只输出一份 JSON；stderr 仅输出不含正文和凭据的错误码。Go 必须使用固定解释器/入口、stdin 和外层进程超时，不拼接 Shell。
-Go 子进程允许继承 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 的大小写形式；本入口不读取其他父进程配置，也不记录代理值。锁定 Republic 的 APITimeoutError 对应 model_timeout，APIConnectionError 对应 model_connection_failed，APIStatusError/APIResponseError 对应 model_upstream_failed；其他 RepublicError 仍为 model_request_failed。HTTP 状态、响应正文、异常 cause/repr 和代理认证信息均不输出。SDK Mock 用连接异常、连接超时和 HTTP 503 覆盖分类及单次请求约束；真实子进程模拟代理检查位于 internal/analysis/bub_test.go。
+Go 子进程允许继承 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 的大小写形式；本入口不读取其他父进程配置，也不记录代理值。锁定 Republic 的 APITimeoutError 对应 model_timeout，APIConnectionError 对应 model_connection_failed，APIStatusError 分为 model_rate_limited（429）与 model_http_error，APIResponseError 为 model_response_invalid；其他 RepublicError 仍为 model_request_failed。HTTP状态与白名单请求ID可输出，响应正文、异常 cause/repr 和代理认证信息均不输出。SDK Mock 用连接异常、连接超时和 HTTP 503 覆盖分类及单次请求约束；真实子进程模拟代理检查位于 internal/analysis/bub_test.go。
 诊断最多 16 项，每项 loc 最多 8 层，只保留已知结构字段及有界索引；任意额外字段名统一为 `unknown_field`。
 type/code 都来自本地白名单，不输出 Pydantic input、msg、ctx、模型正文、HTTP 响应或异常 repr；可区分未知引用、缺少引用、客户/客服来源不符、截断、空白和结构错误。
 过去只返回 `invalid_summary` 且原文已丢弃的请求不能追溯具体原因；新增诊断只用于后续获准请求，不隐式重试。
@@ -101,3 +101,5 @@ input.summary_version 保存上游总结的版本标识，source.source_hash 保
 新增解析依赖于 2026-11-09 查询官方 [PyPI pypdf 元数据](https://pypi.org/pypi/pypdf/json) 与 [python-docx 元数据](https://pypi.org/pypi/python-docx/json)：稳定 pypdf 7.0.0（Python ≥3.10）和 python-docx 1.2.0（Python ≥3.9）兼容当前 3.12+。仅新增这两项及传递 lxml 6.1.3，uv.lock 固定；Bub/Republic 和已有依赖版本不变。lxml 锁文件包含 Windows x64 与 macOS Intel/Apple Silicon 的 CPython 3.12 wheel，原生下载包仍需 CI 实机验收。
 
 简化检查：继续使用原有 SDK/配置/环境预检和 Python 进程边界，不新增模型客户端、服务、插件或运行时数据库。新任务与旧总结保持独立类型，避免把跨工单建议混入 Jev；文档解析只保留确实支持的格式和可核对的位置。
+
+Issue #9：main.upstream_failure 为总结与知识入口共用诊断，APIStatusError 按429/其他HTTP区分，APIResponseError 为响应异常。只读取固定 status_code/request_id，禁止字符串化异常、输出body或headers；请求ID白名单校验。合成SDK测试覆盖429、503、异常响应、成功及敏感正文不外泄；没有更改模型、请求重试或证据校验规则。

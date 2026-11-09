@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 有界同步、共享 Bub 槽轮转总结/案例/建议、独立 Jev 与持久恢复；环境故障先阻断。
+// output: 共享Bub槽轮转调度、持久恢复及白名单错误字段日志。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -407,7 +407,12 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 		finishCancel()
 		a.finish(kind, errors.Join(callErr, saveErr))
 		if err := errors.Join(callErr, saveErr); err != nil {
-			slog.Warn("analysis failed", "kind", kind, "ticket_id", id, "error", err)
+			attrs := []any{"kind", kind, "ticket_id", id, "run_id", run.ID, "error", err}
+			var modelErr *analysis.ModelError
+			if errors.As(callErr, &modelErr) {
+				attrs = append(attrs, "error_category", modelErr.Code, "http_status", modelErr.HTTPStatus, "request_id", modelErr.RequestID)
+			}
+			slog.Warn("analysis failed", attrs...)
 		} else {
 			slog.Info("analysis completed", "kind", kind, "ticket_id", id)
 		}

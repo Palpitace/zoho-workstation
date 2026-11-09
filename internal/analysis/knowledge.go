@@ -1,5 +1,5 @@
 // input: 脱敏工单、当前事实总结、已检索知识及显式模型配置。
-// output: 独立案例/建议输入、无工具 Python 调用和引用/角色验证。
+// output: 独立案例/建议输入、白名单HTTP诊断和引用/角色验证。
 // pos: 知识提取与内部建议的模型边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -88,6 +88,7 @@ func Knowledge(ctx context.Context, cfg config.Model, kind string, input json.Ra
 	}
 	body, _ := json.Marshal(map[string]any{"task": kind, "input": input, "schema_version": schema, "config": map[string]string{"api_base": cfg.URL, "api_key": cfg.Key, "model": cfg.Name}})
 	var envelope struct {
+		HTTPStatus    int             `json:"http_status"`
 		OK            bool            `json:"ok"`
 		Result        json.RawMessage `json:"result"`
 		ReturnedModel string          `json:"returned_model"`
@@ -101,10 +102,10 @@ func Knowledge(ctx context.Context, cfg config.Model, kind string, input json.Ra
 	if !envelope.OK {
 		code := "knowledge_failed"
 		switch envelope.Error {
-		case "invalid_input", "invalid_knowledge", "model_timeout", "model_connection_failed", "model_upstream_failed", "model_request_failed", "proxy_dependency_missing", "proxy_configuration_invalid", "python_environment_invalid":
+		case "model_rate_limited", "model_http_error", "model_response_invalid", "invalid_input", "invalid_knowledge", "model_timeout", "model_connection_failed", "model_upstream_failed", "model_request_failed", "proxy_dependency_missing", "proxy_configuration_invalid", "python_environment_invalid":
 			code = envelope.Error
 		}
-		return nil, envelope.ReturnedModel, errors.New("Bub: " + code)
+		return nil, envelope.ReturnedModel, modelError(code, envelope.HTTPStatus, envelope.RequestID)
 	}
 	if err := ValidateKnowledge(kind, envelope.Result, input); err != nil {
 		return nil, envelope.ReturnedModel, err

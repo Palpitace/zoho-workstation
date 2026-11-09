@@ -1,10 +1,11 @@
 // input: 隔离 SQLite、合成分析版本与供应商结果。
-// output: 旧输入隔离、有限失败重试、本地失败不计次及关闭额度后的持久计数证据。
+// output: 版本隔离、持久重试/执行状态、本地失败不计次及成功保留证据。
 // pos: AI 结果存储边界集成测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -190,4 +191,60 @@ func TestOperationLocksShareCanonicalDatabaseAndRelease(t *testing.T) {
 	if release, err := first.Lock("arbitrary"); err == nil || release != nil {
 		t.Fatal("unknown lock operation accepted")
 	}
+}
+
+func TestTaskStatePersistsAndSeparatesRetryFromRunning(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := store.Open(path, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { db.Close() }()
+	if err = db.Reserve(ctx, []string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	req := store.AnalysisRequest{TicketID: "1", Kind: "bub", InputHash: "v1", SchemaVersion: "v1", RequestedModel: "mock", Round: "test"}
+	check := func(state string, attempts int) {
+		t.Helper()
+		view, e := db.Analysis(ctx, req)
+		if e != nil {
+			t.Fatal(e)
+		}
+		b, _ := json.Marshal(view)
+		var v map[string]any
+		json.Unmarshal(b, &v)
+		if v["task_state"] != state || v["attempts"] != float64(attempts) {
+			t.Fatalf("want %s/%d got %s", state, attempts, b)
+		}
+	}
+	check("pending", 0)
+	run, _, _ := db.StartAnalysis(ctx, req, false)
+	check("running", 1)
+	db.FinishAnalysis(ctx, run.ID, "", nil, errors.New("Bub: model_rate_limited; HTTP 429; request_id=req-safe"))
+	check("retry_waiting", 1)
+	db.Close()
+	db, err = store.Open(path, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("retry_waiting", 1)
+	raw, e := sql.Open("sqlite", path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = raw.Exec(`UPDATE ai_runs SET completed_at='2000-01-01T00:00:00Z' WHERE status='failed'`)
+	raw.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	check("pending", 1)
+	run, _, _ = db.StartAnalysis(ctx, req, true)
+	check("running", 2)
+	db.FinishAnalysis(ctx, run.ID, "mock", json.RawMessage(`{"summary":{}}`), nil)
+	check("success", 2)
+	req.InputHash = "v2"
+	check("pending", 0)
+	db.RecordAnalysisFailure(ctx, req, errors.New("invalid local input"))
+	check("manual", 0)
 }

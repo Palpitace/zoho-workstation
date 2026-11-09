@@ -1,5 +1,5 @@
 # input: stdin 中脱敏工单、当前总结、已选知识证据及显式模型配置。
-# output: 带消息证据的历史案例或带知识来源的内部建议；失败仅返回安全错误码。
+# output: 带证据案例/建议及白名单HTTP错误诊断，不返回异常正文。
 # pos: 独立于事实总结的无工具 Bub 知识入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from republic.events import Completed
 
 from main import (
     MAX_STDIN_BYTES, MessageID, ModelConfig, Snapshot,
-    StrictModel, Text, check_runtime, emit,
+    StrictModel, Text, check_runtime, emit, upstream_failure,
 )
 
 
@@ -221,8 +221,8 @@ def main() -> int:
         result = {"ok": False, "error": "model_timeout"}
     except errors.APIConnectionError:
         result = {"ok": False, "error": "model_connection_failed"}
-    except (errors.APIStatusError, errors.APIResponseError):
-        result = {"ok": False, "error": "model_upstream_failed"}
+    except (errors.APIStatusError, errors.APIResponseError) as error:
+        result = upstream_failure(error)
     except errors.RepublicError:
         result = {"ok": False, "error": "model_request_failed"}
     except Exception:
