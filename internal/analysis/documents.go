@@ -1,5 +1,5 @@
 // input: 用户明确上传的文档名称及有界文件字节。
-// output: 固定 Python 提取器的带位置正文，拒绝不完整或不可读文档。
+// output: 固定 Python 提取器的旧位置片段与 Markdown，显式区分不完整转换。
 // pos: 本地文档解析边界，不调用模型。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package analysis
 
@@ -49,4 +49,25 @@ func ExtractDocument(ctx context.Context, name string, content []byte) ([]knowle
 		return nil, errors.New("文档正文超过 256 KiB，请按章节拆分后导入")
 	}
 	return result.Blocks, nil
+}
+
+// ConvertDocument preserves the Markdown conversion alongside completeness warnings.
+func ConvertDocument(ctx context.Context, name string, content []byte) (string, []string, error) {
+	if len(content) == 0 || len(content) > 10*1024*1024 {
+		return "", nil, errors.New("文件不能为空且不能超过 10 MiB")
+	}
+	body, _ := json.Marshal(map[string]string{"filename": name, "content_base64": base64.StdEncoding.EncodeToString(content)})
+	var result struct {
+		OK         bool     `json:"ok"`
+		Markdown   string   `json:"markdown"`
+		Warnings   []string `json:"warnings"`
+		Incomplete bool     `json:"incomplete"`
+	}
+	if err := pythonJSON(ctx, "python/documents.py", body, &result); err != nil || !result.OK || len(result.Markdown) > 256*1024 {
+		return "", nil, errors.New("无法转换文档，请使用 Markdown、DOCX 或文字 PDF")
+	}
+	if result.Incomplete && len(result.Warnings) == 0 {
+		result.Warnings = []string{"incomplete_conversion"}
+	}
+	return result.Markdown, result.Warnings, nil
 }

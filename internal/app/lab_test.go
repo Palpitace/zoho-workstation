@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成历史会话、受保护 API 与固定 Python 替身。
-// output: 手动批次到有限模型处理、留出发布门槛和人工反馈下一轮的集成验证。
+// output: 部门隔离、手动批次到有限模型处理、留出发布门槛及下一轮反馈验证。
 // pos: 离线实验最小真实进程链路测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -108,6 +108,21 @@ finally:
 	if err = db.PublishKnowledge(ctx, baseline.ID); err != nil {
 		t.Fatal(err)
 	}
+	foreign, err := db.SaveLibrary(ctx, knowledge.Library{Name: "Other department", DepartmentIDs: []string{"different"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignEntry, err := db.SaveKnowledge(ctx, knowledge.Entry{LibraryID: foreign.ID, Kind: "sop", Title: "Other media", Scope: "technical", SourceHash: "foreign", Markdown: "Confirm media before calibration."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.PublishKnowledge(ctx, foreignEntry.ID); err != nil {
+		t.Fatal(err)
+	}
+	foreignBody := map[string]any{"ticket_ids": ids, "knowledge_ids": []int64{foreignEntry.ID}, "from": "2026-11-05T00:00:00+08:00", "until": "2026-11-07T00:00:00+08:00"}
+	if w := request("POST", "/api/lab/batches", foreignBody, true); w.Code != 409 {
+		t.Fatalf("cross-department lab source accepted: %d %s", w.Code, w.Body.String())
+	}
 	createBody := map[string]any{"ticket_ids": ids, "knowledge_ids": []int64{baseline.ID}, "from": "2026-11-05T00:00:00+08:00", "until": "2026-11-07T00:00:00+08:00"}
 	if w := request("POST", "/api/lab/batches", createBody, false); w.Code != 403 {
 		t.Fatal("missing csrf accepted")
@@ -118,6 +133,34 @@ finally:
 	}
 	var batch lab.Batch
 	if err := json.Unmarshal(w.Body.Bytes(), &batch); err != nil {
+		t.Fatal(err)
+	}
+	// A next-round snapshot cannot reuse knowledge after department access was removed.
+	if _, err = db.MutateLabBatch(ctx, batch.ID, func(b *lab.State) error { b.Status = "paused"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	libraries, err := db.ListLibraries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ownLibrary knowledge.Library
+	for _, library := range libraries {
+		if library.ID == baseline.LibraryID {
+			ownLibrary = library
+		}
+	}
+	removed := ownLibrary
+	removed.DepartmentIDs = []string{"different"}
+	if _, err = db.SaveLibrary(ctx, removed); err != nil {
+		t.Fatal(err)
+	}
+	if w := request("POST", "/api/lab/batches", map[string]any{"parent_id": batch.ID}, true); w.Code != 409 {
+		t.Fatalf("revoked parent source copied: %d %s", w.Code, w.Body.String())
+	}
+	if _, err = db.SaveLibrary(ctx, ownLibrary); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.MutateLabBatch(ctx, batch.ID, func(b *lab.State) error { b.Status = "draft"; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	base := fmt.Sprintf("/api/lab/batches/%d", batch.ID)

@@ -1,4 +1,4 @@
-// input: 合成固定批次、不同机型知识和逐步模型结果。
+// input: 合成固定批次、单机型/白名单/排除条件的知识和逐步模型结果。
 // output: 有限改写、独立评估、留出隔离及跨轮反馈证据。
 // pos: 离线流程的确定性行为测试。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package lab
@@ -105,5 +105,31 @@ func TestCandidateRetrievalKeepsLanguageAndModelBoundaries(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("Chinese candidate invisible to original-language query")
+	}
+}
+
+func TestPrefixWhitelistAndExclusions(t *testing.T) {
+	entry := knowledge.Entry{ID: 1, Kind: "sop", Status: "published", Scope: "technical", Title: "Self test procedure", SourceHash: "fixed", ApplicableProducts: []string{"241BT", "2410BT"}, ExcludedProducts: []string{"2410BT"}, Blocks: []knowledge.Block{{ID: "faq", Text: "Use the self test procedure after confirming media."}}}
+	for _, tc := range []struct {
+		message string
+		want    bool
+	}{
+		{"241BT printer self test procedure", true},
+		{"2410BT printer self test procedure", false},
+		{"241BT and 2410BT printer self test procedure", false},
+		{"2411BT printer self test procedure", false},
+		{"printer self test procedure", false},
+	} {
+		body := wireSnapshot("t", []ticket.Message{{ID: "c", Role: "customer", Visibility: "public", Body: tc.message}})
+		got := sources([]knowledge.Entry{entry}, body)
+		if (len(got) > 0) != tc.want {
+			t.Fatalf("prefix %q: %+v", tc.message, got)
+		}
+		if len(got) > 0 && (!strings.Contains(got[0].Text, "不适用机型：2410BT") || !strings.Contains(got[0].Text, "适用机型：241BT")) {
+			t.Fatal("retrieved source lost applicability context")
+		}
+	}
+	if entry.Blocks[0].Text != "Use the self test procedure after confirming media." {
+		t.Fatal("ranking mutated pinned snapshot")
 	}
 }

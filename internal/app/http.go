@@ -163,6 +163,7 @@ func (a *App) Handler() http.Handler {
 		}
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Referrer-Policy", "same-origin")
+		c.Header("Content-Security-Policy", "img-src 'self' data:; object-src 'none'; frame-src 'none'")
 		if len(c.Request.URL.Path) >= 5 && c.Request.URL.Path[:5] == "/api/" {
 			c.Header("Cache-Control", "no-store")
 		}
@@ -176,6 +177,7 @@ func (a *App) Handler() http.Handler {
 		c.Next()
 	})
 	a.knowledgeRoutes(router)
+	a.libraryRoutes(router)
 	a.labRoutes(router)
 	router.GET("/api/status", a.status)
 	router.GET("/api/tickets", a.listTickets)

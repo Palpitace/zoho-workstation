@@ -69,7 +69,7 @@ func relevantKnowledge(ctx context.Context, db *store.Store, cfg config.Config, 
 			}
 		}
 	}
-	sources, err := db.KnowledgeSources(ctx, record.ID, snapshot.Product, snapshot.Subject+" "+snapshot.Description+" "+summarySearchText(summary), 20)
+	sources, err := scopedHybrid(ctx, db, cfg.Zoho.DepartmentID, record.ID, snapshot.Product, snapshot.Subject+" "+snapshot.Description+" "+summarySearchText(summary))
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +158,9 @@ func (a *App) knowledgeView(ctx context.Context, record store.Record, kind strin
 }
 
 func knowledgeDraftBody(entry knowledge.Entry) string {
+	if entry.Markdown != "" {
+		return entry.Markdown
+	}
 	var body strings.Builder
 	fmt.Fprintf(&body, "适用产品：%s\n\n", entry.Product)
 	body.WriteString("发布前请确认适用条件、步骤顺序、注意事项和结束条件。历史案例效果不自动代表普遍有效。\n\n")

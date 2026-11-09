@@ -63,3 +63,5 @@ Issue #4：引用校验失败返回白名单 section、从 0 开始的 item 索�
 文档使用 documents.py 本地解析，未发布前不发送模型。单文件 10 MiB、正文 256 KiB、每块 8 KiB、最多 4096 块；PDF 页和 DOCX 段落/表格及 Markdown 行位置保留。扫描页、图像或无法提取的内容显式拒绝，不做 OCR。原件由 app 私有保存，提取内容再脱敏。详情见 [知识使用说明](../../docs/knowledge.md)。
 
 知识增量验证中，当前容器实测单独 SDK 导入约 16.7 秒，旧代理集成测试的 20 秒总 context 出现无 CONNECT 的超时。测试等待提高为 60 秒，仍断言一次真实本地 CONNECT 和完整凭据隔离；业务超时/重试未改变，不降低语义断言。
+
+知识正文保留为本地Markdown，`RedactedSources`在建议和离线模型边界脱敏正文/标题/产品，保留版本Hash和引用。`ConvertDocument`使用固定Python字节流转Markdown并返回完整性警告；旧块提取接口兼容既有引用。

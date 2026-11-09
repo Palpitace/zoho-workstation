@@ -1,4 +1,4 @@
-// input: 同源受保护的批次选择、执行、逐版本人工反馈与草稿确认请求。
+// input: 受保护的历史工单选择、部门限定知识版本、批次控制及人工反馈。
 // output: 固定离线快照、可审核结果及不会自动发布的 FAQ 修订。
 // pos: 离线实验 HTTP 边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
@@ -167,6 +167,27 @@ func (a *App) createLabBatch(c *gin.Context) {
 			apiError(c, 409, "上一批须已完成或暂停，才能创建新一轮")
 			return
 		}
+		state, stateErr := a.db.State(c.Request.Context())
+		libraries, libraryErr := a.db.ListLibraries(c.Request.Context())
+		if stateErr != nil || libraryErr != nil {
+			apiError(c, 500, "无法核对知识库部门绑定")
+			return
+		}
+		permitted := map[int64]bool{}
+		for _, library := range libraries {
+			for _, department := range library.DepartmentIDs {
+				if department == state.DepartmentID {
+					permitted[library.ID] = true
+				}
+			}
+		}
+		for _, source := range parent.Spec.Knowledge {
+			current, lookupErr := a.db.Knowledge(c.Request.Context(), source.ID)
+			if lookupErr != nil || !permitted[current.LibraryID] {
+				apiError(c, 409, "上一批知识已不属于当前部门，请重新选择知识创建批次")
+				return
+			}
+		}
 		spec = parent.Spec
 		spec.ParentID = parent.ID
 		spec.Feedback = lab.DevelopmentFeedback(parent)
@@ -214,11 +235,25 @@ func (a *App) createLabBatch(c *gin.Context) {
 			apiError(c, 400, "一次最多选择 100 份知识版本")
 			return
 		}
+		state, stateErr := a.db.State(c.Request.Context())
+		if stateErr != nil {
+			apiError(c, 500, "无法核对工单部门")
+			return
+		}
+		allowedEntries, scopeErr := a.db.ScopedKnowledge(c.Request.Context(), 0, state.DepartmentID, "published")
+		if scopeErr != nil {
+			apiError(c, 500, "无法读取部门知识")
+			return
+		}
+		allowed := map[int64]knowledge.Entry{}
+		for _, entry := range allowedEntries {
+			allowed[entry.ID] = entry
+		}
 		unique := map[int64]bool{}
 		for _, id := range body.KnowledgeIDs {
-			entry, err := a.db.Knowledge(c.Request.Context(), id)
-			if err != nil || entry.Kind != "sop" || entry.Status != "published" || unique[id] {
-				apiError(c, 409, "请选择不重复的已发布 FAQ/SOP 版本")
+			entry, authorized := allowed[id]
+			if !authorized || entry.Kind != "sop" || entry.Status != "published" || unique[id] {
+				apiError(c, 409, "请选择当前部门可用且不重复的已发布 FAQ/SOP 版本")
 				return
 			}
 			unique[id] = true

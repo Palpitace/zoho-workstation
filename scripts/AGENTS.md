@@ -9,7 +9,7 @@
 | AGENTS.md | 目录约定 | 打包和验证边界 |
 | package.py | 原生打包 | 携带 Python 总结/知识/文档/离线实验入口、依赖、前端及 Go，生成 SHA256 |
 | check_ai_ui.py | 浏览器回归 | 合成 API 验证逐票轮询、隐藏/竞争及恢复确认 |
-| check_knowledge_ui.py | 知识回归 | 文档草稿、显式发布/修订、建议来源定位、过期隔离及移动端 |
+| check_knowledge_ui.py | 知识回归 | 具名库/分类、批量审核、Markdown 图文编辑、版本隔离、建议引用与移动端 |
 | check_detail_ui.py | 详情回归 | 引用折叠/键盘/安全与静默、延迟、失败、断网、导航竞争 |
 | smoke_package.py | 离线验收 | 异地解压后的 SDK/CLI/SQLite/日志检查 |
 | test_smoke_package.py | 打包回归 | 单/双架构标题及各架构外部依赖校验 |
@@ -32,10 +32,14 @@ check_ai_ui.py 自行启动仅含 web/dist 的临时静态服务器，拦截全�
 
 check_detail_ui.py 同样只访问临时静态资源和合成 API，不读取配置/数据；运行方式与 check_ai_ui.py 相同，可通过 DETAIL_UI_SCREENSHOT 保存截图。验证嵌套引用默认折叠、键盘展开、消息证据跳转展开全部引用、刷新保留展开；手动/静默刷新高度稳定，延迟请求覆盖完整加载反馈、重复点击不重发，500/断网保留成功内容及导航旧响应不覆盖新票。
 
-check_knowledge_ui.py 使用相同的静态服务和合成 API，验证文档导入后尚未发布、明确点击才 POST 发布、编辑新草稿保留旧生效版本、建议跳到来源文档块/原工单消息、返回建议与过期步骤隐藏。桌面与 390px 检查无横向溢出或页面脚本错误，截图保存在忽略的 .cache/knowledge-ui。Playwright 仅为开发验收工具，不增加到项目运行时依赖。原有 AI/详情脚本对新知识端点提供关闭状态，原有请求竞争断言继续只覆盖其原职责。
+check_knowledge_ui.py 使用相同的临时静态服务与合成 API，覆盖知识库重命名/多部门绑定、分类新增、批量文件预览、风险默认不选与全选后仍需确认、保存草稿、带版本引用的混合检索、Markdown 表格/图片渲染和危险 HTML/链接过滤、受保护图片上传、可视/源码切换与新草稿保留当前正式版。保留建议跳到来源块/工单消息、返回建议和过期隐藏断言，并明确点击发布才替代正式版。桌面和 390px 验证无溢出/脚本错误，所有浏览器请求仅限临时服务。运行前先构建 web/dist，再执行 `uv run --no-project --with playwright python scripts/check_knowledge_ui.py`；可用 PLAYWRIGHT_CHROMIUM_EXECUTABLE 指定已有浏览器。截图写忽略的 .cache/knowledge-ui，不读取真实配置、工单或知识资料。沿用一份脚本，没有新增测试框架或运行时依赖。
 
 知识增量：smoke_package 在异地解压目录实际调用 documents.py 解析合成 Markdown，并导入 knowledge.py 校验无工具建议 Schema，不访问模型；同时继续验证 native SDK 库、代理和本机启动。
 
 离线 FAQ 增量：打包白名单包含 `python/lab.py`，复用原有锁定依赖；异地解压验收实际导入 lab 并校验空修订草稿 Schema，零模型调用。不携带批次、评分、候选回复或任何用户知识资料。
 
 | check_lab_ui.py | 合成浏览器验收 | 批次创建、手动启动、评分轮询保留、草稿与移动端 |
+
+| build_embedding.py | 原生推理构建 | 固定稳定 llama.cpp 源码和 SHA256，CPU 静态构建 |
+
+本地检索：build_embedding.py按固定SHA256验证官方稳定llama.cpp v0.9.0源码，只构建CPU静态llama-server（禁GPU/OpenSSL/OpenMP），复制许可证和版本；runtime为忽略的第三方构建产物。package.py复制runtime/llama，不带模型权重、知识或用户配置。模型首次使用在应用内显式下载。CMake和C++仅构建机需要。

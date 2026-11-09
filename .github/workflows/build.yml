@@ -25,7 +25,7 @@ jobs:
           - os: macos-15
             name: macos-arm64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -65,6 +65,10 @@ jobs:
           uv run --project python --locked --no-dev python -m unittest discover -s python -p 'test_*.py'
           python -m unittest discover -s scripts -p 'test_*.py'
           go run ./cmd/checkdocs
+      - name: Build and verify local CPU retrieval
+        run: |
+          python scripts/build_embedding.py
+          VERIFY_LOCAL_EMBEDDING=1 go test ./internal/embedding -run TestNativeRetrieval -v -timeout=30m
       - name: Build self-contained package
         run: python scripts/package.py
       - name: Verify relocated package

@@ -47,6 +47,12 @@ def main(archive: Path):
         if sys.platform == "darwin":
             check_native_libraries(root / "python/packages")
             print("SDK native libraries are independent of Homebrew/build-host paths: PASS")
+        inference = root / "runtime" / "llama" / ("llama-server.exe" if os.name == "nt" else "llama-server")
+        subprocess.run([str(inference), "--version"], cwd=root, check=True, capture_output=True, timeout=30)
+        subprocess.run([str(python), "-c", "import sys,io,base64; sys.path.insert(0,'python'); from docx import Document; import documents; d=Document(); d.add_paragraph('Do not reset unsupported devices.'); f=io.BytesIO(); d.save(f); r=documents.extract({'filename':'synthetic.docx','content_base64':base64.b64encode(f.getvalue()).decode()}); assert 'Do not reset' in r['markdown']; print('bundled MarkItDown conversion: PASS')"], cwd=root, env=env, check=True, timeout=120)
+        if not (root / "web/dist/vendor/vditor/dist/js/lute/lute.min.js").is_file():
+            raise RuntimeError("local Markdown editor assets missing")
+        print("relocated CPU inference executable and local editor assets: PASS")
         binary = root / ("workstation.exe" if os.name == "nt" else "workstation")
         invalid = subprocess.run([str(binary), "check"], cwd=root, capture_output=True)
         assert invalid.returncode != 0

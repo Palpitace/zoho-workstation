@@ -23,7 +23,21 @@ import (
 
 func (a *App) knowledgeRoutes(router *gin.Engine) {
 	router.GET("/api/knowledge", func(c *gin.Context) {
-		entries, err := a.db.ListKnowledge(c.Request.Context(), c.Query("q"), c.Query("status"))
+		entries, err := a.db.ListKnowledge(c.Request.Context(), "", c.Query("status"))
+		filtered := entries[:0]
+		for _, entry := range entries {
+			if library := queryID(c, "library_id"); library != 0 && entry.LibraryID != library {
+				continue
+			}
+			if category := queryID(c, "category_id"); category != 0 && entry.CategoryID != category {
+				continue
+			}
+			if q := strings.ToLower(c.Query("q")); q != "" && !strings.Contains(strings.ToLower(entry.Title+" "+entry.Markdown), q) {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		entries = filtered
 		if err != nil {
 			apiError(c, 500, "无法读取知识库")
 			return
@@ -31,6 +45,7 @@ func (a *App) knowledgeRoutes(router *gin.Engine) {
 		// The list needs metadata only; full evidence is loaded at the detail endpoint.
 		for i := range entries {
 			entries[i].Blocks = []knowledge.Block{}
+			entries[i].Markdown = ""
 			entries[i].MessageIDs = []string{}
 		}
 		c.JSON(200, gin.H{"data": entries})
@@ -166,12 +181,18 @@ func (a *App) importKnowledge(c *gin.Context) {
 
 func (a *App) draftKnowledge(c *gin.Context) {
 	var body struct {
-		Title         string `json:"title"`
-		Scope         string `json:"scope"`
-		Product       string `json:"product"`
-		Text          string `json:"text"`
-		SourceEntryID int64  `json:"source_entry_id"`
-		ReplacesID    int64  `json:"replaces_id"`
+		Title              string   `json:"title"`
+		Markdown           string   `json:"markdown"`
+		LibraryID          int64    `json:"library_id"`
+		CategoryID         int64    `json:"category_id"`
+		ApplicableProducts []string `json:"applicable_products"`
+		ExcludedProducts   []string `json:"excluded_products"`
+		ReviewFlags        []string `json:"review_flags"`
+		Scope              string   `json:"scope"`
+		Product            string   `json:"product"`
+		Text               string   `json:"text"`
+		SourceEntryID      int64    `json:"source_entry_id"`
+		ReplacesID         int64    `json:"replaces_id"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 300*1024)
 	if c.ShouldBindJSON(&body) != nil {
@@ -182,7 +203,10 @@ func (a *App) draftKnowledge(c *gin.Context) {
 		apiError(c, 400, "知识分类无效")
 		return
 	}
-	entry := knowledge.Entry{Kind: "sop", Scope: body.Scope, Title: redactDocumentText(strings.TrimSpace(body.Title)), Product: redactDocumentText(strings.TrimSpace(body.Product)), SourceName: "人工整理草稿", ReplacesID: body.ReplacesID}
+	if body.Markdown != "" {
+		body.Text = body.Markdown
+	}
+	entry := knowledge.Entry{LibraryID: body.LibraryID, CategoryID: body.CategoryID, ApplicableProducts: body.ApplicableProducts, ExcludedProducts: body.ExcludedProducts, ReviewFlags: body.ReviewFlags, Kind: "sop", Scope: body.Scope, Title: redactDocumentText(strings.TrimSpace(body.Title)), Product: redactDocumentText(strings.TrimSpace(body.Product)), SourceName: "人工整理草稿", ReplacesID: body.ReplacesID}
 	if body.SourceEntryID != 0 {
 		source, err := a.db.Knowledge(c.Request.Context(), body.SourceEntryID)
 		if err != nil || source.Status == "archived" {
@@ -201,19 +225,7 @@ func (a *App) draftKnowledge(c *gin.Context) {
 		apiError(c, 400, "草稿正文不能为空且不能超过 256 KiB")
 		return
 	}
-	// Split at rune boundaries, retaining all text and explicit section positions.
-	remaining := redactDocumentText(body.Text)
-	for len(remaining) > 0 {
-		end := min(len(remaining), 8*1024)
-		for end < len(remaining) && (remaining[end]&0xc0) == 0x80 {
-			end--
-		}
-		text := remaining[:end]
-		remaining = remaining[end:]
-		if strings.TrimSpace(text) != "" {
-			entry.Blocks = append(entry.Blocks, knowledge.Block{ID: "section-" + strconv.Itoa(len(entry.Blocks)+1), Text: text})
-		}
-	}
+	entry.Markdown = body.Text
 	identity, _ := json.Marshal(entry)
 	digest := sha256.Sum256(identity)
 	entry.SourceHash = hex.EncodeToString(digest[:])
@@ -269,6 +281,10 @@ func (a *App) setKnowledgeStatus(c *gin.Context, action string) {
 			apiError(c, 404, "知识条目不存在")
 			return
 		}
+		if hasMissingImages(entry.Markdown) {
+			apiError(c, 409, "请补齐图片后发布")
+			return
+		}
 		if entry.LabBatchID > 0 {
 			batch, batchErr := a.db.LabBatch(c.Request.Context(), entry.LabBatchID)
 			if batchErr != nil || !lab.ValidationComplete(batch) {
@@ -295,10 +311,20 @@ func inheritKnowledgeSource(entry *knowledge.Entry, source knowledge.Entry) erro
 	if entry.Title == "" {
 		entry.Title = source.Title + " · SOP 草稿"
 	}
-	if entry.Product == "" {
+	if entry.Product == "" && entry.ApplicableProducts == nil {
 		entry.Product = source.Product
 	}
 	entry.SourceName = "知识条目 #" + strconv.FormatInt(source.ID, 10)
+	entry.LibraryID = source.LibraryID
+	if entry.CategoryID == 0 {
+		entry.CategoryID = source.CategoryID
+	}
+	if entry.ApplicableProducts == nil {
+		entry.ApplicableProducts = source.ApplicableProducts
+	}
+	if entry.ExcludedProducts == nil {
+		entry.ExcludedProducts = source.ExcludedProducts
+	}
 	entry.SourceTicketID = source.SourceTicketID
 	entry.MessageIDs = source.MessageIDs
 	entry.SourceTickets = append([]string{}, source.SourceTickets...)

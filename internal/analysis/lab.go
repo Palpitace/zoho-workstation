@@ -36,7 +36,7 @@ func Lab(ctx context.Context, cfg config.Model, task string, input lab.Input) (L
 		return LabResult{}, errors.New("Bub: invalid_input")
 	}
 	// A nil Go slice is an empty collection at this protocol boundary, never JSON null.
-	input.Sources = append([]knowledge.Source{}, input.Sources...)
+	input.Sources = RedactedSources(input.Sources)
 	for i := range input.Sources {
 		input.Sources[i].MessageIDs = append([]string{}, input.Sources[i].MessageIDs...)
 		if input.Sources[i].Scope == "" {

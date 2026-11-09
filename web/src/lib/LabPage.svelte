@@ -69,7 +69,7 @@
 
 <div class="space-y-6">
   <div class="flex flex-wrap items-start justify-between gap-3">
-    <div><h1 class="text-2xl font-semibold">{batchID ? `离线批次 #${batchID}` : "离线实验"}</h1><p class="mt-2 text-sm text-muted-foreground">用历史工单模拟回复，评估后改进 FAQ。回复不会发送给客户。</p></div>
+    <div><h1 class="text-2xl font-semibold">{batchID ? `离线批次 #${batchID}` : "离线实验"}</h1><details class="mt-2 text-sm text-muted-foreground"><summary class="cursor-pointer">使用帮助</summary><div class="mt-3 space-y-2"><p>用历史工单模拟回复，评估后改进 FAQ，不发送给客户。政策和参考资料只读，技术知识可提出修订。</p><p>相同首封来信固定分组，约 60% 学习、20% 开发、20% 留出；至少 5 组。关联工单填写同一关联组。</p><p>每个开发节点最多改写 2 次，失败单步最多重试 1 次；完成后仍需检查失败记录。留出评分不用于下一轮优化。</p></div></details></div>
     {#if batchID}<Button href="#/lab" variant="outline">返回批次列表</Button>{/if}
   </div>
   {#if error}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
@@ -89,8 +89,8 @@
           {#each selection as row}<div class="flex flex-wrap items-center gap-3 p-3 text-sm"><label class="flex min-w-0 flex-1 items-start gap-3"><input type="checkbox" class="mt-1" disabled={!!row.reason} value={row.id} bind:group={selected} /><span class="min-w-0 break-words">{row.subject}<span class="mt-1 block text-xs text-muted-foreground">工单 {row.ticket_number ? `#${row.ticket_number}` : row.id} · {dateTime(row.created_time)} · {row.reason || `${row.nodes} 个模拟节点`}</span></span></label>{#if !row.reason}<Input aria-label={`工单 ${row.ticket_number || row.id} 关联组`} placeholder="关联组（可选）" class="w-36" maxlength={40} bind:value={groups[row.id]} />{/if}</div>{/each}
           {#if !selection.length}<p class="p-4 text-sm text-muted-foreground">此范围没有已完整同步的工单。</p>{/if}
         </div>
-        <details open><summary class="cursor-pointer text-sm font-medium">固定知识版本 · 已选 {knowledgeIDs.length} 份</summary><p class="my-2 text-xs text-muted-foreground">售后政策和参考资料只读；仅技术知识可提出修订。未选 FAQ 时，基线只依据当时的会话。</p><div class="space-y-2">{#each knowledge as entry}<label class="flex gap-2 text-sm"><input type="checkbox" value={entry.id} bind:group={knowledgeIDs} />{entry.title} · 版本 #{entry.id} · {entry.scope === "technical" ? "技术知识" : entry.scope === "policy" ? "售后政策" : "只读参考"}</label>{/each}</div></details>
-        <p class="text-xs text-muted-foreground">相同首封来信放入同一组，约 60% 学习、20% 开发、20% 留出验证。至少 5 组；分组会固定保存。已知关联工单请填写相同关联组；系统不保证自动识别所有相似案例。</p>
+        <details open><summary class="cursor-pointer text-sm font-medium">固定知识版本 · 已选 {knowledgeIDs.length} 份</summary><div class="space-y-2">{#each knowledge as entry}<label class="flex gap-2 text-sm"><input type="checkbox" value={entry.id} bind:group={knowledgeIDs} />{entry.title} · 版本 #{entry.id} · {entry.scope === "technical" ? "技术知识" : entry.scope === "policy" ? "售后政策" : "只读参考"}</label>{/each}</div></details>
+
         <Button disabled={blocked || selected.length < 5} onclick={() => create()}>保存批次并预览</Button>
         <Button variant="ghost" onclick={() => { picking = false; void load(); }}>取消选择</Button>
       </section>
@@ -106,7 +106,7 @@
         {#if batch.state.status === "running"}<Button variant="outline" disabled={blocked} onclick={() => run("pause")}>暂停后续调用</Button>{/if}
         {#if ["completed","paused"].includes(batch.state.status)}<Button disabled={blocked} onclick={() => create(batch!.id)}>带入开发反馈，创建下一轮</Button>{/if}
       </div>
-      <p class="text-xs text-muted-foreground">每个开发节点最多改写 2 次；失败的单步最多重试 1 次。完成状态表示流程结束，请一并检查失败记录。留出评分不会参与下一轮优化。</p>
+
       <details class="text-xs text-muted-foreground"><summary class="cursor-pointer">固定输入与版本</summary><p class="mt-2">{dateTime(batch.spec.start_time)} 至 {dateTime(batch.spec.end_time)} · {batch.spec.model} · {batch.spec.schema}{batch.spec.parent_id ? ` · 上一轮 #${batch.spec.parent_id}` : ""}</p><p class="mt-1">知识版本：{batch.spec.knowledge.map((k) => `${k.title} #${k.id}`).join("、") || "未选择"}</p></details>
     </section>
     <section class="space-y-4">

@@ -1,4 +1,4 @@
-// input: 固定批次、已保存的模型尝试和节点级反馈。
+// input: 固定历史前缀、带机型适用/排除条件的知识快照、已记录模型结果和人工反馈。
 // output: 下一次单独调用、冻结的技术修订候选及批次结束判断。
 // pos: 有限离线流程的纯函数编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package lab
@@ -194,7 +194,7 @@ func sources(entries []knowledge.Entry, body json.RawMessage) []knowledge.Source
 	rankingText := strings.ToLower(text)
 	for _, e := range entries {
 		product := strings.TrimSpace(e.Product)
-		if product != "" && !modelMention(text, product) {
+		if !prefixApplicable(e, text) {
 			continue
 		}
 		products[e.ID] = e.Product
@@ -202,6 +202,13 @@ func sources(entries []knowledge.Entry, body json.RawMessage) []knowledge.Source
 		if product != "" {
 			rankingText = strings.ReplaceAll(rankingText, strings.ToLower(product), " ")
 		}
+		// Carry reviewed model conditions into the cited text before ranking.
+		e.Blocks = append([]knowledge.Block{}, e.Blocks...)
+		for i := range e.Blocks {
+			e.Blocks[i].Text = knowledge.ContextText(e, e.Blocks[i].Text)
+		}
+		e.ApplicableProducts = nil
+		e.ExcludedProducts = nil
 		// Applicability was checked against the prefix; rank all compatible
 		// entries together instead of stopping at the first document matches.
 		e.Product = ""
@@ -225,6 +232,37 @@ func sources(entries []knowledge.Entry, body json.RawMessage) []knowledge.Source
 		}
 	}
 	return selected
+}
+
+// prefixApplicable uses only historical message text. A bare exclusion with no
+// positive model identification cannot establish which procedure is applicable.
+func prefixApplicable(entry knowledge.Entry, text string) bool {
+	known := false
+	if product := strings.TrimSpace(entry.Product); product != "" {
+		if !modelMention(text, product) {
+			return false
+		}
+		known = true
+	}
+	if len(entry.ApplicableProducts) > 0 {
+		matched := false
+		for _, product := range entry.ApplicableProducts {
+			if modelMention(text, product) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+		known = true
+	}
+	for _, product := range entry.ExcludedProducts {
+		if modelMention(text, product) {
+			return false
+		}
+	}
+	return len(entry.ExcludedProducts) == 0 || known
 }
 
 func modelMention(text, model string) bool {

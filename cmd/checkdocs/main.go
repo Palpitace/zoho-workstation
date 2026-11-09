@@ -16,7 +16,7 @@ func excluded(path string) bool {
 		return true
 	}
 	switch filepath.Base(path) {
-	case ".git", "data", "logs", "raw", "samples", "node_modules", ".venv", "__pycache__", ".cache", ".pytest_cache", ".ruff_cache", "dist", "bin":
+	case ".git", "data", "logs", "raw", "samples", "node_modules", ".venv", "__pycache__", ".cache", ".pytest_cache", ".ruff_cache", "dist", "bin", "runtime":
 		return true
 	}
 	return false

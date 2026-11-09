@@ -68,3 +68,8 @@ Bub 增量已通过同一合成浏览器主链路：建议/客户确认执行/�
 2026-11-05 在固定 shadcn-svelte 1.8.0 CLI/Vega 基础上增加 Combobox 所需 command、popover、input-group 子集，保留既有 button/input。CLI 按当前 release-age 策略解析的稳定兼容 Bits UI 2.20.4 与 peer @internationalized/date 3.12.4 均改为精确锁定；未升级既有依赖。官方 Combobox 是 Popover+Command 组合。删除本期未使用的 Dialog、Textarea、Command 其他扩展与导出，相关类型/构建重新验证。
 
 知识增量：侧栏增加知识库，提供本地文档导入、解析正文预览、SOP 草稿修订/显式发布和停用。详情增加独立“参考排查建议”，引用知识版本及当前消息，失败不影响事实总结或评估；过期建议隐藏处理步骤并提示更新。延续 Tailwind/shadcn、系统字体及无多余动画的内部工具布局，不新增前端依赖。
+
+
+2026-11-09 知识库升级：前端固定增加 Vditor 4.0.1 和 DOMPurify 3.4.17。vite.config.ts 从已锁定安装目录提供/复制 Vditor 本地资源到 vendor/vditor，构建包不依赖 CDN；没有运行时 Node 服务。知识 Markdown 经过白名单过滤显示，工单原文仍转义。具名知识库、目录分类、ZIP/多文件集中预览、不可变 Markdown 编辑/历史和本地检索入口见 src/lib/AGENTS.md。页面说明收拢到帮助，不隐藏操作失败或未发布状态。
+
+构建配置使用 Node 内置文件 API 复制锁定资源，因此增加开发期 @types/node 26.6.6，仅作类型检查，不升级生产运行时。知识批次预览只把恢复用任务 ID 存 sessionStorage，不存正文或凭据。

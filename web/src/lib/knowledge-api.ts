@@ -1,12 +1,12 @@
 // input: 同源知识 API、内存中的 CSRF 令牌和用户选择的文件或草稿。
-// output: 分类知识版本、有限正文对照、独立建议状态及受保护的管理请求。
+// output: 具名知识库、Markdown 版本、导入预览、检索与有限正文对照、独立建议状态及受保护的管理请求。
 // pos: 知识界面与 Go 的契约边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import type { AnalysisRun } from "./api";
 
 export type KnowledgeScope = "technical" | "policy" | "reference";
 export type KnowledgeBlock = { id: string; text: string };
 export type KnowledgeEntry = {
-  id: number; replaces_id?: number; scope: KnowledgeScope; source_tickets: string[]; lab_batch_id?: number; kind: "case" | "sop"; status: "draft" | "published" | "archived";
+  id: number; library_id?: number; category_id?: number; markdown?: string; applicable_products?: string[]; excluded_products?: string[]; review_flags?: string[]; replaces_id?: number; scope: KnowledgeScope; source_tickets: string[]; lab_batch_id?: number; kind: "case" | "sop"; status: "draft" | "published" | "archived";
   title: string; product: string; source_name: string; source_hash: string; source_ticket_id?: string;
   message_ids: string[]; blocks: KnowledgeBlock[]; created_at: string; published_at?: string;
 };
@@ -70,4 +70,15 @@ export function knowledgeDiff(previous: string, current: string): { kind: "same"
     else result.push({ kind: "added", text: b[j++] });
   }
   return result;
+}
+
+export type KnowledgeLibrary = { id: number; name: string; department_ids: string[] };
+export type KnowledgeCategory = { id: number; library_id: number; name: string };
+export type ImportItem = { id: string; title: string; category: string; scope: KnowledgeScope; markdown: string; product?: string; applicable_products?: string[]; excluded_products?: string[]; status: "ready" | "duplicate" | "failed"; warnings: string[]; requires_confirmation: boolean; error?: string };
+export type ImportBatch = { id: string; items: ImportItem[] };
+export type EmbeddingStatus = { state: string; progress?: number; error?: string; indexed?: number; total?: number; degraded?: boolean };
+export function knowledgeMarkdown(entry: KnowledgeEntry): string { return entry.markdown || entry.blocks.map((block) => block.text).join("\n\n"); }
+
+export function knowledgeReviewLabel(flag: string): string {
+  return ({ policy_confirmation_required: "政策内容需确认", internal_reference_only: "仅供内部参考", date_or_release_channel_review: "核对生效日期或软件版本", regional_condition_conflict: "地区条件存在差异", comment_requires_review: "核对图片识别文字", external_images_pending: "引用图片待下载", internal_or_policy_review: "核对内部升级要求或政策", model_applicability_review: "核对机型适用条件", cross_document_model_conflict: "不同文档的机型步骤有差异", model_list_non_exhaustive: "机型列表可能不完整", platform_macos: "适用于 macOS", platform_windows: "适用于 Windows", embedded_content_not_extracted: "内嵌内容未完整提取", empty_pdf_pages: "PDF 包含未提取文字的页面", additional_sections_not_extracted: "附加章节未完整提取", conversion_empty: "未提取到正文" } as Record<string, string>)[flag] || flag;
 }

@@ -8,7 +8,11 @@
 | --- | --- | --- |
 | AGENTS.md | 目录说明 | API 和页面组件边界 |
 | knowledge-api.ts | 知识契约 | 来源分类/版本、有限正文差异、建议状态和受保护的管理请求 |
-| KnowledgePage.svelte | 知识页面 | 分类资料导入、不可变草稿、版本对照和显式发布/停用/恢复 |
+| KnowledgePage.svelte | 知识页面 | 具名库/部门/分类、不可变 Markdown 草稿、版本对照与发布/恢复 |
+| KnowledgeImport.svelte | 批量导入 | ZIP/多文件预览、逐项修订、风险确认和失败重试 |
+| KnowledgeRetrieval.svelte | 检索管理 | 本地模型下载状态、关键词降级与带引用的检索测试 |
+| MarkdownEditor.svelte | 编辑器 | 本地 Vditor 可视/源码/预览及受保护图片上传 |
+| MarkdownView.svelte | 排版预览 | 本地 Markdown 解析、严格 HTML 过滤与本地素材显示 |
 | LabPage.svelte | 离线实验 | 手动批次、固定数据/知识快照、运行进度与修订审核 |
 | LabReply.svelte | 回复复核 | 单节点回复版本、独立评估与人工评分/改写 |
 | lab-api.ts | 离线契约 | 批次、回复、评估及受保护操作的类型 |
@@ -24,7 +28,7 @@
 | utils.ts | 生成工具 | shadcn 官方 cn 及辅助类型 |
 | components | 基础组件 | CLI 生成的最小 shadcn 组件集合 |
 
-所有工单正文使用 Svelte 文本插值，禁止 {@html}。附件只显示名称、类型及大小，不使用其 URL 下载或预览。API 报错不回显原始响应；POST 仅展示服务约定的安全 error 字段。
+所有工单正文使用 Svelte 文本插值，禁止 {@html}；知识 Markdown 仅允许下文隔离过滤预览。附件只显示名称、类型及大小，不使用其 URL 下载或预览。API 报错不回显原始响应；POST 仅展示服务约定的安全 error 字段。
 
 source=comment 不自动等于内部：结合 visibility 标记备注。mixed_authors=true 显示混合发言者，不把整段聊天归为单一客户。消息 DRAFT/FAILED/PENDING 和 is_description_thread 保留可见标记。角色未知不按方向猜测。
 
@@ -85,3 +89,21 @@ TicketAdvice 位于事实总结之后、沟通记录之前，GET /api/tickets/:i
 
 
 本轮合成浏览器验证覆盖版本差异、轮询保留人工编辑、保存修订不替换正式版、历史恢复仅建草稿、显式发布及 390px 无横向溢出；截图和脚本保存在忽略的 `.cache/knowledge-versions-ui/`。没有调用真实模型或读取真实资料。
+
+
+## 知识库升级
+
+具名知识库可关联多个部门，分类归属于知识库，列表与检索均提交 library_id。创建、重命名、条目分类移动、图片上传和发布沿用 CSRF 防护。Markdown 是唯一可编辑正文；旧条目缺 markdown 时从 blocks 生成显示兼容文本，旧引用仍定位具体 block。保存另建草稿，预览不触发写操作，编辑值不被轮询覆盖。
+
+批量导入接受 ZIP/多个文件，先呈现逐项状态、类别、警告和全部 Markdown；无风险 ready 项默认选中，政策/冲突等风险项不默认选中。发布含风险项须额外勾选核对，缺素材是否可发布由后端最终校验。失败项可单独重试，用户改动在确认时提交。单条可编辑适用/排除机型和类别。页面只显示实际接口结果，不把入库等同发布。
+
+Vditor 4.0.1（2026-11-09 核实官方 npm 稳定版）提供可视编辑，另有源码和排版预览；资源由 Vite 从锁定包复制到 dist/vendor/vditor，开发服务器同路径提供。禁用 localStorage 缓存、媒体/代码/数学自动执行，图片通过受保护接口保存本地。MarkdownView 使用 Vditor md2html + DOMPurify 3.4.17 白名单，只允许正文排版元素，图像仅 /api/knowledge/assets/，外链仅 HTTP(S) 且 noreferrer；不执行嵌入脚本、iframe、HTML 事件或远程图片。工单和模型原文仍使用 Svelte 文本插值，只有此隔离预览组件可注入经过过滤的 HTML。
+
+本地模型面板显示后端下载/索引/降级状态，定时读取不启动下载；用户明确点击才 POST 下载或重试。检索测试提交所选知识库/部门/机型，结果逐项链接固定知识版本与块。一般说明收进知识库/离线实验帮助和建议说明，失败、未发布、过期及待核对内容继续直接显示。
+
+简化检查：复用现有知识版本、hash 导航、请求封装和 shadcn 控件；Vditor 仅作为正文编辑器，不替换页面 UI，不新增状态管理或路由服务。没有额外保留一份富文本 JSON，Markdown 是编辑输出。
+
+实际消融：移除未启用的 Vditor 数学、流程图、代码高亮运行库及重复 JS，从完整 dist 约 23 MiB 缩为核心 Lute/语言/图标/样式/图片约 4 MiB；可视/源码/预览不调用这些附加渲染。构建插件仅复制实际使用的资源目录，编辑器和预览均禁用附加媒体/数学渲染。
+
+
+本轮验证：`pnpm --dir web check` 为 0 错误/0 警告，`pnpm --dir web build` 通过。合成浏览器验证批量选择（风险默认不选/发布需确认）、保存草稿、混合检索引用、Markdown 表格/本地图片预览、XSS/危险链接过滤、可视与源码切换、CSRF 图片上传、保存不替换正式版，以及桌面/390px 编辑器无横向溢出；浏览器未请求外部资源。脚本和截图保存在忽略的 `.cache/knowledge-upgrade-ui/`，不含真实业务资料。打包资源消融后的相同主链路仍通过。

@@ -119,3 +119,9 @@ FAQ 问题、答案、条件、修订原因及标签合并后的 UTF-8 正文 �
 反馈可附 `rated_reply` 保存当时被评分的确切旧模型草稿，让仅分数/标签的反馈仍有上下文；兼容缺少此字段的旧反馈。它不是新工单事实，旧引用不会加入本次可用证据集合。生成器可参考评分和草稿，独立评估器仍不接收反馈。
 
 合成离线环境检查的进程等待为60秒：本机并行构建时SDK冷启动实测19.07秒，超过旧测试10秒；断言及业务CheckPython的30秒超时保持原约定。
+
+## Markdown转换（2026-11-09）
+
+MarkItDown0.1.9仅安装docx/pdf extra，惰性导入并用`convert_stream(..., StreamInfo(extension=...))`，插件关闭，不提供云端客户。MD/TXT直接读取；原页/段提取继续提供缺失检查，转换为空时保留已提取文字并追加conversion_empty警告。返回markdown与原blocks；无扫描OCR保证。官方PyPI确认最新onnxruntime1.31.1没有Intel macOS wheel，条件约束该平台Python<3.14为最后提供CPython3.12官方wheel的1.23.2，其余平台保持当前稳定版本。锁文件固定全部版本，下载包固定Python3.12.14。
+
+文档解析按格式惰性导入：非法PDF头在加载解析库前拒绝；MD路径不加载MarkItDown/ONNX。转换空结果保留原提取文本并标记conversion_empty，测试覆盖警告与否定词，不静默声称排版完整。

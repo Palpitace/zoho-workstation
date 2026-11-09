@@ -83,7 +83,7 @@
     {:else if view?.waiting_reason}<Badge variant="outline">等待资料</Badge>{/if}
     <Button variant="outline" class="h-10 sm:ml-auto" disabled={loading || !!blocked} title={blocked} onclick={rerun}>重新生成建议</Button>
   </header>
-  <p class="text-xs text-muted-foreground">供内部处理参考，不会自动回复客户。</p>
+  <details class="text-xs text-muted-foreground"><summary class="cursor-pointer">建议说明</summary><p class="mt-2">供内部处理参考，不会自动回复客户。请按引用核对适用机型和条件。</p></details>
   {#if loading}<p role="status" class="text-sm text-muted-foreground">正在读取建议…</p>{/if}
   {#if error}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
   {#if actionError}<p role="alert" class="text-sm text-destructive">{actionError}</p>{/if}
