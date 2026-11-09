@@ -31,7 +31,7 @@ def context():
         ]},
         "summary": {"device_info": [], "customer_feedback": [], "support_responses": []},
         "sources": [{"id": "knowledge:1:page-1", "entry_id": 1, "block_id": "page-1",
-                     "title": "P1 troubleshooting", "kind": "sop", "product": "P1", "text": "Check media size"}],
+                     "title": "P1 troubleshooting", "kind": "sop", "scope": "technical", "product": "P1", "text": "Check media size"}],
     })
 
 

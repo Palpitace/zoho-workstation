@@ -1,5 +1,5 @@
-// input: 已脱敏案例、文档块、明确发布/停用操作与检索条件。
-// output: 不可覆盖的知识版本、SOP 草稿发布及有效来源查询。
+// input: 已脱敏案例、分类文档、明确发布/停用/恢复操作与检索条件。
+// output: 不可覆盖的知识版本及来源链、SOP 草稿发布/恢复和有效来源查询。
 // pos: SQLite 知识生命周期边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package store
 
@@ -8,7 +8,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"zoho-workstation/internal/knowledge"
@@ -16,7 +18,7 @@ import (
 
 var ErrKnowledgeConflict = errors.New("knowledge version is no longer publishable")
 
-const knowledgeColumns = `k.id,k.replaces_id,k.kind,k.status,k.title,k.product,k.source_name,k.source_hash,k.source_ticket_id,k.message_ids,k.blocks,k.created_at,k.published_at`
+const knowledgeColumns = `k.id,k.replaces_id,k.kind,k.status,k.title,k.product,k.source_name,k.source_hash,k.source_ticket_id,k.message_ids,k.blocks,k.created_at,k.published_at,k.scope,k.source_tickets,k.lab_batch_id`
 
 func (s *Store) initKnowledge() error {
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS knowledge_entries (
@@ -29,10 +31,27 @@ func (s *Store) initKnowledge() error {
 		UNIQUE(kind,source_ticket_id,source_hash)
 	);
 	CREATE INDEX IF NOT EXISTS knowledge_status ON knowledge_entries(status,kind);`)
-	return err
+	if err != nil {
+		return err
+	}
+	for name, definition := range map[string]string{"scope": "TEXT NOT NULL DEFAULT 'reference'", "source_tickets": "TEXT NOT NULL DEFAULT '[]'", "lab_batch_id": "INTEGER NOT NULL DEFAULT 0"} {
+		var exists int
+		if err = s.db.QueryRow("SELECT count(*) FROM pragma_table_info('knowledge_entries') WHERE name=?", name).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			if _, err = s.db.Exec("ALTER TABLE knowledge_entries ADD COLUMN " + name + " " + definition); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func validateKnowledge(entry knowledge.Entry) error {
+	if err := validateKnowledgeProvenance(entry); err != nil {
+		return err
+	}
 	if (entry.Kind != "case" && entry.Kind != "sop") || strings.TrimSpace(entry.Title) == "" || strings.TrimSpace(entry.SourceHash) == "" || len(entry.Title) > 1024 || len(entry.SourceHash) > 256 || len(entry.Product) > 256 || len(entry.SourceName) > 1024 || entry.ReplacesID < 0 {
 		return errors.New("invalid knowledge metadata")
 	}
@@ -76,26 +95,8 @@ func (s *Store) SaveKnowledge(ctx context.Context, entry knowledge.Entry) (knowl
 	if !errors.Is(err, sql.ErrNoRows) {
 		return knowledge.Entry{}, err
 	}
-	if entry.ReplacesID != 0 {
-		var parentKind, parentStatus string
-		var parentReplaces int64
-		if err = tx.QueryRowContext(ctx, "SELECT kind,status,replaces_id FROM knowledge_entries WHERE id=?", entry.ReplacesID).Scan(&parentKind, &parentStatus, &parentReplaces); err != nil {
-			return knowledge.Entry{}, err
-		}
-		if parentKind != "sop" || parentStatus == "archived" {
-			return knowledge.Entry{}, ErrKnowledgeConflict
-		}
-		// Editing a pending revision still replaces its effective ancestor,
-		// not only the intermediate draft. Publication then withdraws that SOP.
-		if parentStatus == "draft" && parentReplaces != 0 {
-			entry.ReplacesID = parentReplaces
-			if err = tx.QueryRowContext(ctx, "SELECT status FROM knowledge_entries WHERE id=?", parentReplaces).Scan(&parentStatus); err != nil {
-				return knowledge.Entry{}, err
-			}
-			if parentStatus == "archived" {
-				return knowledge.Entry{}, ErrKnowledgeConflict
-			}
-		}
+	if err = bindKnowledgeProvenance(ctx, tx, &entry); err != nil {
+		return knowledge.Entry{}, err
 	}
 	entry.ID = 0
 	entry.Status = "draft"
@@ -116,7 +117,8 @@ func (s *Store) SaveKnowledge(ctx context.Context, entry knowledge.Entry) (knowl
 	}
 	messages, _ := json.Marshal(entry.MessageIDs)
 	blocks, _ := json.Marshal(entry.Blocks)
-	result, err := tx.ExecContext(ctx, `INSERT INTO knowledge_entries(replaces_id,kind,status,title,product,source_name,source_hash,source_ticket_id,message_ids,blocks,created_at,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, entry.ReplacesID, entry.Kind, entry.Status, entry.Title, entry.Product, entry.SourceName, entry.SourceHash, entry.SourceTicketID, string(messages), string(blocks), entry.CreatedAt, entry.PublishedAt)
+	sourceTickets, _ := json.Marshal(entry.SourceTickets)
+	result, err := tx.ExecContext(ctx, `INSERT INTO knowledge_entries(replaces_id,kind,status,title,product,source_name,source_hash,source_ticket_id,message_ids,blocks,created_at,published_at,scope,source_tickets,lab_batch_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, entry.ReplacesID, entry.Kind, entry.Status, entry.Title, entry.Product, entry.SourceName, entry.SourceHash, entry.SourceTicketID, string(messages), string(blocks), entry.CreatedAt, entry.PublishedAt, entry.Scope, string(sourceTickets), entry.LabBatchID)
 	if err != nil {
 		return knowledge.Entry{}, err
 	}
@@ -184,13 +186,16 @@ func (s *Store) Knowledge(ctx context.Context, id int64) (knowledge.Entry, error
 
 func scanKnowledge(row interface{ Scan(...any) error }) (knowledge.Entry, error) {
 	var entry knowledge.Entry
-	var messages, blocks string
-	err := row.Scan(&entry.ID, &entry.ReplacesID, &entry.Kind, &entry.Status, &entry.Title, &entry.Product, &entry.SourceName, &entry.SourceHash, &entry.SourceTicketID, &messages, &blocks, &entry.CreatedAt, &entry.PublishedAt)
+	var messages, blocks, sourceTickets string
+	err := row.Scan(&entry.ID, &entry.ReplacesID, &entry.Kind, &entry.Status, &entry.Title, &entry.Product, &entry.SourceName, &entry.SourceHash, &entry.SourceTicketID, &messages, &blocks, &entry.CreatedAt, &entry.PublishedAt, &entry.Scope, &sourceTickets, &entry.LabBatchID)
 	if err == nil {
 		err = json.Unmarshal([]byte(messages), &entry.MessageIDs)
 	}
 	if err == nil {
 		err = json.Unmarshal([]byte(blocks), &entry.Blocks)
+	}
+	if err == nil {
+		err = json.Unmarshal([]byte(sourceTickets), &entry.SourceTickets)
 	}
 	return entry, err
 }
@@ -232,4 +237,152 @@ func (s *Store) KnowledgeSources(ctx context.Context, excludeTicketID, product, 
 		return nil, err
 	}
 	return knowledge.SelectSources(entries, excludeTicketID, product, query, limit), nil
+}
+
+func uniqueSourceTickets(ids []string) []string {
+	unique := map[string]bool{}
+	for _, id := range ids {
+		if id != "" {
+			unique[id] = true
+		}
+	}
+	result := make([]string, 0, len(unique))
+	for id := range unique {
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// KnowledgeHistory includes sibling drafts as well as the effective lineage.
+// Content stays immutable; status and publication timestamps describe lifecycle.
+func (s *Store) KnowledgeHistory(ctx context.Context, id int64) ([]knowledge.Entry, error) {
+	entry, err := s.Knowledge(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Kind != "sop" {
+		return []knowledge.Entry{entry}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `WITH RECURSIVE family(id) AS (
+ SELECT ? UNION SELECT k.id FROM knowledge_entries k JOIN family f ON k.replaces_id=f.id
+ UNION SELECT k.replaces_id FROM knowledge_entries k JOIN family f ON k.id=f.id WHERE k.replaces_id<>0
+ ) SELECT `+knowledgeColumns+` FROM knowledge_entries k JOIN family f ON f.id=k.id ORDER BY k.id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []knowledge.Entry{}
+	for rows.Next() {
+		entry, err := scanKnowledge(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+// RestoreKnowledge copies an earlier immutable version to a new review draft.
+// The currently published version remains active until explicit publication.
+func (s *Store) RestoreKnowledge(ctx context.Context, id int64) (knowledge.Entry, error) {
+	target, err := s.Knowledge(ctx, id)
+	if err != nil {
+		return knowledge.Entry{}, err
+	}
+	if target.Kind != "sop" {
+		return knowledge.Entry{}, ErrKnowledgeConflict
+	}
+	history, err := s.KnowledgeHistory(ctx, id)
+	if err != nil {
+		return knowledge.Entry{}, err
+	}
+	var current knowledge.Entry
+	for _, entry := range history {
+		if entry.Status == "published" {
+			current = entry
+		}
+	}
+	if current.ID == 0 || current.ID == target.ID {
+		return knowledge.Entry{}, ErrKnowledgeConflict
+	}
+	target.ID = 0
+	target.ReplacesID = current.ID
+	target.SourceHash = fmt.Sprintf("restore:%d:%d:%d", id, current.ID, time.Now().UnixNano())
+	target.SourceName = fmt.Sprintf("restore version %d", id)
+	return s.SaveKnowledge(ctx, target)
+}
+
+func validateKnowledgeProvenance(entry knowledge.Entry) error {
+	if entry.Scope != "" && entry.Scope != "technical" && entry.Scope != "policy" && entry.Scope != "reference" {
+		return errors.New("invalid knowledge scope")
+	}
+	if entry.LabBatchID < 0 || len(entry.SourceTickets) > 1000 {
+		return errors.New("invalid knowledge provenance")
+	}
+	for _, id := range entry.SourceTickets {
+		if id == "" || len(id) > 128 {
+			return errors.New("invalid knowledge source ticket")
+		}
+	}
+	return nil
+}
+
+// bindKnowledgeProvenance resolves the effective predecessor and retains all
+// known source tickets before the immutable revision is inserted.
+func bindKnowledgeProvenance(ctx context.Context, tx *sql.Tx, entry *knowledge.Entry) error {
+	var err error
+	if entry.ReplacesID != 0 {
+		parent, err := scanKnowledge(tx.QueryRowContext(ctx, "SELECT "+knowledgeColumns+" FROM knowledge_entries k WHERE k.id=?", entry.ReplacesID))
+		if err != nil {
+			return err
+		}
+		if parent.Kind != "sop" || parent.Status == "archived" {
+			return ErrKnowledgeConflict
+		}
+		if entry.LabBatchID != 0 && parent.Scope != "technical" {
+			return errors.New("automatic revisions require technical knowledge")
+		}
+		if entry.Scope == "" {
+			entry.Scope = parent.Scope
+		}
+		if parent.Scope == "policy" && entry.Scope != "policy" {
+			return errors.New("policy scope cannot be reclassified")
+		}
+		entry.SourceTickets = append(entry.SourceTickets, parent.SourceTickets...)
+		if parent.SourceTicketID != "" {
+			entry.SourceTickets = append(entry.SourceTickets, parent.SourceTicketID)
+		}
+		if entry.LabBatchID == 0 {
+			entry.LabBatchID = parent.LabBatchID
+		}
+		// A revision of a pending draft still supersedes its effective ancestor.
+		if parent.Status == "draft" && parent.ReplacesID != 0 {
+			entry.ReplacesID = parent.ReplacesID
+			var status, scope string
+			if err = tx.QueryRowContext(ctx, "SELECT status,scope FROM knowledge_entries WHERE id=?", parent.ReplacesID).Scan(&status, &scope); err != nil {
+				return err
+			}
+			if status == "archived" {
+				return ErrKnowledgeConflict
+			}
+			if entry.LabBatchID != 0 && scope != "technical" {
+				return errors.New("automatic revisions require a technical effective predecessor")
+			}
+		}
+	}
+	if entry.Scope == "" {
+		entry.Scope = "reference"
+	}
+	if entry.LabBatchID != 0 && entry.Scope != "technical" {
+		return errors.New("automatic proposals must be technical")
+	}
+	if entry.SourceTicketID != "" {
+		entry.SourceTickets = append(entry.SourceTickets, entry.SourceTicketID)
+	}
+	entry.SourceTickets = uniqueSourceTickets(entry.SourceTickets)
+	if err = validateKnowledgeProvenance(*entry); err != nil {
+		return err
+	}
+	return nil
 }

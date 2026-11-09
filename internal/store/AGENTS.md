@@ -11,8 +11,10 @@
 | store_test.go | 集成测试 | 重启/迁移保留快照和预算、重复保存及部门边界 |
 | lock_unix.go | 平台锁 | Linux/macOS 非阻塞 Flock |
 | lock_windows.go | 平台锁 | Windows 非阻塞 LockFileEx |
-| knowledge.go | 知识存储 | 幂等案例、SOP 草稿/发布/停用、不可变来源与检索 |
-| knowledge_test.go | 知识集成验证 | 发布隔离、版本竞争、重启、来源有效性及机型边界 |
+| knowledge.go | 知识存储 | 幂等案例、SOP 草稿/发布/停用、来源分类、版本恢复与检索 |
+| knowledge_test.go | 知识集成验证 | 发布隔离、版本竞争、重启、来源分类继承、历史恢复及机型边界 |
+| lab.go | 离线批次存储 | 固定输入、追加调用/评分、事务更新与中断恢复 |
+| lab_test.go | 离线批次验证 | 不可覆盖的输入/结果、并发评分和重启暂停 |
 | analysis.go | 分析记录 | 输入版本、本地校验失败、成功结果与调用计数 |
 | retry_test.go | 持续重试验证 | 持久冷却、无累计上限、重启和输入隔离 |
 | analysis_test.go | AI 存储测试 | 版本隔离、invalid 不计费、恢复、不限额计数及操作锁 |
@@ -60,3 +62,16 @@ SOP 导入始终为 draft，只有 PublishKnowledge 显式操作生效。Replace
 简化检查：只新增一张正在使用的知识版本表；不增加向量服务、发布队列、抽象仓储或重复全文副本。版本发布与查询由现有 SQLite 事务及 Go 词面排序完成。
 
 知识派生 SOP 可保留 source_ticket_id/message_ids 以回到原案例证据，人工发布后独立生效。来源签名由 app 包含当前输入/Schema/模型及案例内容；存储不把调用 ID 当成知识版本。知识块最多 4096 个，总文本仍有界。ai_runs 的 kind 允许 case/advice，复用原缓存、重试和重启恢复，所有真实请求继续计入持久计数。
+
+
+## 离线 FAQ 批次与版本
+
+`lab_batches` 只保存正在使用的离线批次：不可变 `spec_json` 与有界 `state_json`，不另建通用队列。`CreateLabBatch` 最多 50 张、每张最多 3 个节点；`LabBatch` 取完整快照，`ListLabBatches` 省略会话、知识、调用输入/结果及评分正文。创建输入上限 32 MiB，状态上限 128 MiB，超限明确失败，不截断证据。
+
+`MutateLabBatch` 在事务中读取最新状态，避免模型完成覆盖同时提交的人工评分；回调不得嵌套调用 Store（只有一个数据库连接）。调用先追加 running 记录才允许发送，完成后不可改写；评分追加到具体成功回复版本，旧评分保留。调用状态只从 running 结束，最多一个活动调用。`RecoverLabBatches` 将未完成调用标为 interrupted，保留次数与结果并暂停批次；明确恢复前不重发可能已计费的请求。此恢复必须在应用持有 analysis 操作锁后执行。
+
+知识条目增加 `scope`（technical / policy / reference，旧数据默认 reference）、`source_tickets`、`lab_batch_id`，均为非破坏性列迁移。修订合并祖先工单来源，未显式指定时继承分类与批次来源；policy 不可通过改写重分类。带批次来源的自动提案只允许 technical，不能替换 policy 或 reference。人工新建版本仍须显式发布。
+
+`KnowledgeHistory` 返回同一 SOP 家族（含兄弟草稿）的不可变版本。`RestoreKnowledge` 将历史内容复制为替换当前正式版本的新草稿，显式发布前旧正式版本仍有效；每次明确恢复创建新草稿版本。没有当前正式版本或恢复自身时返回版本冲突，不隐式复活已停用的整个家族。
+
+简化检查：批次状态用一张有界 JSON 表，不为节点、评分和模型尝试各建队列；知识历史沿用 replaces_id 链，不增加重复版本表。事务与重启合成验证覆盖这些边界。

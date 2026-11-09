@@ -1,4 +1,4 @@
-// input: 已脱敏案例、经人工发布的 SOP 和当前工单的机型/检索词。
+// input: 已脱敏案例、带分类和来源链的正式 SOP，以及当前工单检索词。
 // output: 带稳定来源定位的知识条目与有限、机型相容的参考片段。
 // pos: 无数据库或模型依赖的知识契约与词面检索。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package knowledge
@@ -19,6 +19,9 @@ type Entry struct {
 	ID             int64    `json:"id"`
 	ReplacesID     int64    `json:"replaces_id,omitempty"`
 	Kind           string   `json:"kind"`
+	Scope          string   `json:"scope"`
+	SourceTickets  []string `json:"source_tickets"`
+	LabBatchID     int64    `json:"lab_batch_id,omitempty"`
 	Status         string   `json:"status"`
 	Title          string   `json:"title"`
 	Product        string   `json:"product"`
@@ -37,6 +40,7 @@ type Source struct {
 	BlockID    string   `json:"block_id"`
 	Title      string   `json:"title"`
 	Kind       string   `json:"kind"`
+	Scope      string   `json:"scope"`
 	Product    string   `json:"product"`
 	Text       string   `json:"text"`
 	TicketID   string   `json:"ticket_id,omitempty"`
@@ -83,7 +87,7 @@ func SelectSources(entries []Entry, excludeTicketID, product, query string, limi
 			}
 			candidates = append(candidates, candidate{Source{
 				ID: fmt.Sprintf("knowledge:%d:%s", entry.ID, block.ID), EntryID: entry.ID,
-				BlockID: block.ID, Title: entry.Title, Kind: entry.Kind, Product: entry.Product,
+				BlockID: block.ID, Title: entry.Title, Kind: entry.Kind, Scope: entry.Scope, Product: entry.Product,
 				Text: block.Text, TicketID: entry.SourceTicketID, SourceHash: entry.SourceHash,
 				MessageIDs: entry.MessageIDs,
 			}, score})

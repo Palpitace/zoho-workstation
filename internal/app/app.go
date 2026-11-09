@@ -1,5 +1,5 @@
 // input: 固定配置、Go 独占存储和只读 Zoho 客户端。
-// output: 有界同步、共享 Bub 槽轮转总结/案例/建议、独立 Jev 与持久恢复；环境故障先阻断。
+// output: 有界同步、共享 Bub 槽轮转总结/案例/建议/离线批次、独立 Jev 与持久恢复；环境故障先阻断。
 // pos: 单 Go 服务的后台生命周期编排。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -85,7 +85,7 @@ func (a *App) Start(ctx context.Context) error {
 		}
 		a.releases = append(a.releases, release)
 	}
-	if err := a.db.RecoverAnalysis(ctx); err != nil {
+	if err := errors.Join(a.db.RecoverAnalysis(ctx), a.db.RecoverLabBatches(ctx)); err != nil {
 		for _, r := range a.releases {
 			r()
 		}
@@ -240,7 +240,7 @@ func (a *App) scheduleAnalysis() {
 	a.mu.Lock()
 	next := a.bubNext
 	a.mu.Unlock()
-	bubKinds := []string{"bub", "case", "advice"}
+	bubKinds := []string{"bub", "case", "advice", "lab"}
 	kinds := []string{"jev"}
 	for i := range bubKinds {
 		kinds = append(kinds, bubKinds[(next+i)%len(bubKinds)])
@@ -249,11 +249,14 @@ func (a *App) scheduleAnalysis() {
 	var pythonErr error
 	for _, kind := range kinds {
 		model, _, _ := a.model(kind)
+		if kind == "lab" {
+			model = a.cfg.Bub
+		}
 		if !model.Enabled {
 			continue
 		}
 		if kind != "jev" {
-			if kind != "bub" && analysis.CheckKnowledge() != nil {
+			if (kind == "case" || kind == "advice") && analysis.CheckKnowledge() != nil {
 				continue
 			}
 			if !pythonChecked {
@@ -265,23 +268,38 @@ func (a *App) scheduleAnalysis() {
 				continue
 			}
 		}
-		for _, record := range records {
-			if !a.automaticallyEligible(record) {
-				a.mu.Lock()
-				delete(a.recovery[kind], record.ID)
-				a.mu.Unlock()
-				continue
+		if kind == "lab" {
+			if analysis.CheckLab() == nil {
+				_, err := a.startLabStep()
+				if err != nil && !errors.Is(err, store.ErrBusy) {
+					a.setError("lab", err)
+				}
 			}
-			started, err := a.startAnalysis(record.ID, kind, false)
-			if errors.Is(err, store.ErrBusy) || started {
-				break
-			}
-			if err != nil {
-				a.setError(kind, err)
-			}
-			if a.ctx.Err() != nil {
-				return
-			}
+			continue
+		}
+		a.scheduleTickets(kind, records)
+	}
+}
+
+// scheduleTickets advances the online ticket workload; offline batches never
+// enter this eligibility/recovery path.
+func (a *App) scheduleTickets(kind string, records []store.Record) {
+	for _, record := range records {
+		if !a.automaticallyEligible(record) {
+			a.mu.Lock()
+			delete(a.recovery[kind], record.ID)
+			a.mu.Unlock()
+			continue
+		}
+		started, err := a.startAnalysis(record.ID, kind, false)
+		if errors.Is(err, store.ErrBusy) || started {
+			break
+		}
+		if err != nil {
+			a.setError(kind, err)
+		}
+		if a.ctx.Err() != nil {
+			return
 		}
 	}
 }
@@ -319,7 +337,7 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	if !a.started || a.closed {
 		return false, errors.New("service is stopping")
 	}
-	if a.busy[kind] || (kind != "jev" && (a.busy["bub"] || a.busy["case"] || a.busy["advice"])) {
+	if a.busy[kind] || (kind != "jev" && (a.busy["bub"] || a.busy["case"] || a.busy["advice"] || a.busy["lab"])) {
 		return false, store.ErrBusy
 	}
 	req, input, prepareErr := analysisRequest(a.ctx, a.db, a.cfg, id, kind, DevelopmentRound)
@@ -377,9 +395,9 @@ func (a *App) startAnalysis(id, kind string, force bool) (bool, error) {
 	}
 	a.busy[kind] = true
 	if kind != "jev" {
-		for i, k := range []string{"bub", "case", "advice"} {
+		for i, k := range []string{"bub", "case", "advice", "lab"} {
 			if k == kind {
-				a.bubNext = (i + 1) % 3
+				a.bubNext = (i + 1) % 4
 			}
 		}
 	}

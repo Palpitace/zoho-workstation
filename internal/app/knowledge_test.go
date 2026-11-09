@@ -1,5 +1,5 @@
 // input: 隔离 SQLite、合成证据、固定 Python 进程替身和受保护 HTTP 请求。
-// output: 自动案例/建议、草稿隔离、版本失效、来源回溯及与 Jev 分离的集成证据。
+// output: 自动案例/建议、分类草稿、来源继承、版本恢复及受保护操作的集成证据。
 // pos: 知识链路端到端回归。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -20,6 +20,7 @@ import (
 	"zoho-workstation/internal/analysis"
 	"zoho-workstation/internal/config"
 	"zoho-workstation/internal/knowledge"
+	"zoho-workstation/internal/lab"
 	"zoho-workstation/internal/store"
 	"zoho-workstation/internal/ticket"
 	"zoho-workstation/internal/zoho"
@@ -329,4 +330,76 @@ func TestKnowledgeDocumentImportIsLocalDraft(t *testing.T) {
 	if _, err := os.Stat(filepath.Join("data", "knowledge", entry.SourceHash+".md")); err != nil {
 		t.Fatal("original document not retained")
 	}
+}
+
+func TestKnowledgeHTTPVersionHistoryAndScope(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "versions.db"), "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	service, err := New(config.Config{Port: "8080", SyncInterval: time.Hour}, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := service.Handler()
+	request := func(method, path string, body any, authorized bool) *httptest.ResponseRecorder {
+		encoded, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, path, bytes.NewReader(encoded))
+		req.Host = "localhost:8080"
+		req.Header.Set("Content-Type", "application/json")
+		if authorized {
+			req.Header.Set("X-CSRF-Token", service.csrf)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+	first := request("POST", "/api/knowledge/draft", map[string]any{"title": "Technical FAQ", "text": "Use the specified cable.", "scope": "technical"}, true)
+	var v1 knowledge.Entry
+	if first.Code != 201 || json.Unmarshal(first.Body.Bytes(), &v1) != nil || v1.Scope != "technical" {
+		t.Fatalf("technical draft: %d %s", first.Code, first.Body.String())
+	}
+	publish := request("POST", fmt.Sprintf("/api/knowledge/%d/publish", v1.ID), nil, true)
+	if publish.Code != 200 {
+		t.Fatalf("publish: %d", publish.Code)
+	}
+	second := request("POST", "/api/knowledge/draft", map[string]any{"title": "Technical FAQ", "text": "Use the specified cable and power supply.", "source_entry_id": v1.ID, "replaces_id": v1.ID}, true)
+	var v2 knowledge.Entry
+	if second.Code != 201 || json.Unmarshal(second.Body.Bytes(), &v2) != nil || v2.Scope != "technical" {
+		t.Fatalf("inherited scope: %d %s", second.Code, second.Body.String())
+	}
+	if response := request("POST", fmt.Sprintf("/api/knowledge/%d/publish", v2.ID), nil, true); response.Code != 200 {
+		t.Fatalf("revision publish: %d", response.Code)
+	}
+	if denied := request("POST", fmt.Sprintf("/api/knowledge/%d/restore", v1.ID), nil, false); denied.Code != 403 {
+		t.Fatalf("restore not protected: %d", denied.Code)
+	}
+	restored := request("POST", fmt.Sprintf("/api/knowledge/%d/restore", v1.ID), nil, true)
+	var v3 knowledge.Entry
+	if restored.Code != 201 || json.Unmarshal(restored.Body.Bytes(), &v3) != nil || v3.Status != "draft" || v3.ReplacesID != v2.ID || v3.Blocks[0].Text != v1.Blocks[0].Text {
+		t.Fatalf("restore: %d %s", restored.Code, restored.Body.String())
+	}
+	history := request("GET", fmt.Sprintf("/api/knowledge/%d/history", v2.ID), nil, false)
+	var versions struct {
+		Data []knowledge.Entry `json:"data"`
+	}
+	if history.Code != 200 || json.Unmarshal(history.Body.Bytes(), &versions) != nil || len(versions.Data) != 3 {
+		t.Fatalf("history: %d %s", history.Code, history.Body.String())
+	}
+	if invalid := request("POST", "/api/knowledge/draft", map[string]any{"title": "FAQ", "text": "content", "scope": "anything"}, true); invalid.Code != 400 {
+		t.Fatalf("invalid classification: %d", invalid.Code)
+	}
+	batch, err := db.CreateLabBatch(context.Background(), lab.Spec{Schema: lab.Schema, Model: "synthetic", ModelURLHash: "url", Samples: []lab.Sample{{TicketID: "1", Group: "one", Split: "holdout"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchecked, err := db.SaveKnowledge(context.Background(), knowledge.Entry{Kind: "sop", Title: "Unverified proposal", Scope: "technical", LabBatchID: batch.ID, SourceHash: "unverified", Blocks: []knowledge.Block{{ID: "step", Text: "Proposed operation."}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked := request("POST", fmt.Sprintf("/api/knowledge/%d/publish", unchecked.ID), nil, true); blocked.Code != 409 {
+		t.Fatalf("unverified experiment published: %d", blocked.Code)
+	}
+
 }

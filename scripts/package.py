@@ -1,5 +1,5 @@
 # input: 已构建前端、Go/uv 工具链、固定 Python 版本和锁定依赖。
-# output: 携带总结/知识/文档入口且不含配置和数据的本机便携包、构建元信息及 SHA256。
+# output: 携带总结/知识/文档/离线实验入口且不含配置和数据的本机便携包、构建元信息及 SHA256。
 # pos: GitHub Actions 与本地共用的打包入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def main():
             build_env["OPENSSL_STATIC"] = "1"
             build_env["OPENSSL_DIR"] = run("brew", "--prefix", "openssl@3", capture_output=True).stdout.strip()
         run("uv", "pip", "install", "--python", str(python), "--target", str(stage / "python" / "packages"), "--require-hashes", "--link-mode", "copy", *wheel_options, "-r", str(requirements), env=build_env)
-        for file in ("main.py", "knowledge.py", "documents.py", "pyproject.toml", "uv.lock"):
+        for file in ("main.py", "knowledge.py", "documents.py", "lab.py", "pyproject.toml", "uv.lock"):
             shutil.copy2(ROOT / "python" / file, stage / "python" / file)
         shutil.copytree(ROOT / "web" / "dist", stage / "web" / "dist")
         shutil.copy2(ROOT / ".env.example", stage / ".env.example")

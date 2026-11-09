@@ -1,5 +1,5 @@
 # input: 合成会话、模型结果、SDK 模拟错误及隔离代理/缺依赖环境。
-# output: 可选设备信息省略后其余总结保留、引用失败栏目/条目位置； 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断的证据。
+# output: 可选设备信息省略后其余总结保留、引用失败栏目/条目位置； 整单汇总与引用契约、真实离线代理 transport 和安全运行环境诊断（容许SDK冷启动）的证据。
 # pos: Python 总结契约的最小验证。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import asyncio
 import copy
@@ -65,7 +65,7 @@ class SummaryContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             def check(expected):
                 result = subprocess.run([sys.executable, entry, "--check"], input="", text=True,
-                                        capture_output=True, env=env, timeout=10)
+                                        capture_output=True, env=env, timeout=60)
                 self.assertEqual(json.loads(result.stdout), expected)
                 self.assertEqual(result.returncode, 0 if expected["ok"] else 1)
                 self.assertNotIn("synthetic:private", result.stdout + result.stderr)
@@ -79,7 +79,7 @@ class SummaryContractTest(unittest.TestCase):
                                   "config": {"api_base": "https://model.invalid", "api_key": "synthetic-private-key", "model": "deepseek:synthetic"},
                                   "schema_version": "bub-summary-v6"})
             failure = subprocess.run([sys.executable, entry], input=payload, text=True,
-                                     capture_output=True, env=env, timeout=10)
+                                     capture_output=True, env=env, timeout=60)
             self.assertEqual(json.loads(failure.stdout), {"ok": False, "error": "proxy_dependency_missing"})
             self.assertEqual(failure.returncode, 1)
             self.assertNotIn("synthetic-private", failure.stdout + failure.stderr)

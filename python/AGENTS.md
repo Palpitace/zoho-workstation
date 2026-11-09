@@ -1,6 +1,6 @@
 一旦我所属的文件夹有所变化请更新我。
 
-本目录负责固定 Python stdin/stdout 总结、知识分析和离线文档提取入口及锁定环境。
+本目录负责固定 Python stdin/stdout 总结、知识分析、离线 FAQ 实验和文档提取入口及锁定环境。
 模块关系：Go 发送完整脱敏会话，本目录返回校验后的 JSON，Go 再次校验并持久化。
 不负责数据库、Zoho、工具执行、插件、持久会话记忆、Web 服务或企业微信。
 
@@ -61,6 +61,8 @@ v5 结果只有 device_info、customer_feedback、support_responses 三个必有
 | knowledge.py | 独立知识入口 | 带来源的历史案例和内部建议，不改变事实总结/Jev 输入 |
 | documents.py | 本地文档提取 | DOCX/PDF/Markdown 文本及页/段锚点，不完整内容明确拒绝静默成功 |
 | test_knowledge.py | 合成行为验证 | 案例执行/结果、建议来源、文档提取和无工具单次 SDK 调用 |
+| lab.py | 离线实验入口 | 历史节点回复、独立评估、技术 FAQ 草稿与只读政策约束 |
+| test_lab.py | 离线契约验证 | 引用/政策边界、独立单次 SDK 请求及失败元信息 |
 | pyproject.toml | 依赖声明 | 稳定版本和 Python 兼容范围 |
 | uv.lock | 自动生成锁文件 | 固定全部解析依赖及校验信息 |
 | .venv/ | 忽略的安装产物 | 本机 Python 解释器与依赖 |
@@ -101,3 +103,19 @@ input.summary_version 保存上游总结的版本标识，source.source_hash 保
 新增解析依赖于 2026-11-09 查询官方 [PyPI pypdf 元数据](https://pypi.org/pypi/pypdf/json) 与 [python-docx 元数据](https://pypi.org/pypi/python-docx/json)：稳定 pypdf 7.0.0（Python ≥3.10）和 python-docx 1.2.0（Python ≥3.9）兼容当前 3.12+。仅新增这两项及传递 lxml 6.1.3，uv.lock 固定；Bub/Republic 和已有依赖版本不变。lxml 锁文件包含 Windows x64 与 macOS Intel/Apple Silicon 的 CPython 3.12 wheel，原生下载包仍需 CI 实机验收。
 
 简化检查：继续使用原有 SDK/配置/环境预检和 Python 进程边界，不新增模型客户端、服务、插件或运行时数据库。新任务与旧总结保持独立类型，避免把跨工单建议混入 Jev；文档解析只保留确实支持的格式和可核对的位置。
+
+## 离线 FAQ 实验
+
+`lab.py` 接收 `{task:"reply"|"evaluate"|"propose",input,config,schema_version:"bub-lab-v1"}`。input 为 Go 固定的 `{ticket,sources,reply?,evaluation?,feedback}`；reply/evaluate 的 ticket 仅含截至节点的历史证据，propose 可使用学习组完整公开会话。本入口不查询其他工单、不看留出集、不访问数据库，阶段和最多两次改写由 Go 控制。
+
+每次任务新建无工具、无 sidecar、无持久记忆的 Core Agent，单次 SDK 请求、max_retries=0；75 秒总时限、60 秒 HTTP 时限。继续复用已锁定 Bub/Republic 和 DeepSeek 配置，无新供应商或依赖。reply 随客户来信语言，内部 rationale/missing_information 用中文；evaluate 使用独立 Prompt/上下文，不能携带已有 evaluation 或非空反馈，只按当前节点和知识审查候选回复。评估优先事实、机型、诉求覆盖、已失败操作、越权政策，再看表达；评分只是模型暂定判断。
+
+propose 最多三条技术草稿，scope 固定 technical，replaces_id 只能为 0 或输入中正式技术 SOP 的正数 entry_id；policy/reference 不允许被自动替换，policy 不能用作技术规则提炼证据。政策可作为回复中的正式只读依据。没有可追溯内容返回空数组，不因缺设备/缺知识编造内容。输入含未知或混合作者时不能当客户确认，历史客服回复不自动是正确答案。
+
+输出用 Pydantic 校验枚举、条数、字段长度和引用，再由 Go 复核；回复需要当前消息引用，知识来源可空（澄清缺失信息）；评估发现证据缺失时引用可空，不能为通过校验伪造引用。模型有 warning/blocker 时不能 verdict=pass。失败返回固定 `invalid_input`、`invalid_lab_result`、`lab_failed` 或既有模型/环境错误码，不返回模型正文和异常原文；供应商已有响应时仍返回 returned_model/request_id/usage。SDK Mock 验证三种任务各一次无工具请求，以及被拒绝结果保留用量信息。
+
+FAQ 问题、答案、条件、修订原因及标签合并后的 UTF-8 正文 ≤12 KiB，为实验来源附加的有界原文问题摘录留出空间，避免草稿在 16 KiB 知识块边界静默丢失。Python 与 Go 都按最终正文的字节数验证。Go 把未完整检索的技术 SOP 降为只读 reference；Prompt 明确不能据局部片段替换整份 SOP。人工反馈 note ≤4000 字、edited_reply ≤6000 字，batch_id 保存原始批次以追溯评分来源。
+
+反馈可附 `rated_reply` 保存当时被评分的确切旧模型草稿，让仅分数/标签的反馈仍有上下文；兼容缺少此字段的旧反馈。它不是新工单事实，旧引用不会加入本次可用证据集合。生成器可参考评分和草稿，独立评估器仍不接收反馈。
+
+合成离线环境检查的进程等待为60秒：本机并行构建时SDK冷启动实测19.07秒，超过旧测试10秒；断言及业务CheckPython的30秒超时保持原约定。

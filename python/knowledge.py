@@ -1,4 +1,4 @@
-# input: stdin 中脱敏工单、当前总结、已选知识证据及显式模型配置。
+# input: stdin 中脱敏工单、当前总结、已选带范围标签的知识证据及显式模型配置。
 # output: 带消息证据的历史案例或带知识来源的内部建议；失败仅返回安全错误码。
 # pos: 独立于事实总结的无工具 Bub 知识入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 from __future__ import annotations
@@ -29,6 +29,7 @@ class Source(StrictModel):
     block_id: str
     title: str
     kind: Literal["case", "sop"]
+    scope: Literal["technical", "policy", "reference", ""] = "reference"
     product: str = ""
     text: str
     ticket_id: str = ""

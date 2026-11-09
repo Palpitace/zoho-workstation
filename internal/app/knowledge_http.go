@@ -1,5 +1,5 @@
-// input: 同源受保护的文档上传、SOP 草稿/发布操作及知识查询。
-// output: 有界本地导入、不可变版本、显式发布和独立建议状态。
+// input: 同源受保护的分类资料上传、SOP 草稿/发布/恢复操作及知识查询。
+// output: 有界本地导入、不可变版本对照、显式发布/恢复和独立建议状态。
 // pos: 知识库与人工确认的 HTTP 边界。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 package app
 
@@ -17,6 +17,7 @@ import (
 	"strings"
 	"zoho-workstation/internal/analysis"
 	"zoho-workstation/internal/knowledge"
+	"zoho-workstation/internal/lab"
 	"zoho-workstation/internal/ticket"
 )
 
@@ -47,30 +48,12 @@ func (a *App) knowledgeRoutes(router *gin.Engine) {
 		}
 		c.JSON(200, entry)
 	})
+	router.GET("/api/knowledge/:id/history", a.knowledgeHistory)
+	router.POST("/api/knowledge/:id/restore", a.restoreKnowledge)
 	router.POST("/api/knowledge/import", a.importKnowledge)
 	router.POST("/api/knowledge/draft", a.draftKnowledge)
 	for _, action := range []string{"publish", "archive"} {
-		router.POST("/api/knowledge/:id/"+action, func(c *gin.Context) {
-			id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-			if err != nil {
-				apiError(c, 400, "知识条目 ID 无效")
-				return
-			}
-			if action == "publish" {
-				err = a.db.PublishKnowledge(c.Request.Context(), id)
-			} else {
-				err = a.db.ArchiveKnowledge(c.Request.Context(), id)
-			}
-			if err != nil {
-				apiError(c, 409, "此版本无法操作，请刷新后检查条目状态及被替代版本")
-				return
-			}
-			select {
-			case a.analysisWake <- struct{}{}:
-			default:
-			}
-			c.JSON(200, gin.H{"status": "ok"})
-		})
+		router.POST("/api/knowledge/:id/"+action, func(c *gin.Context) { a.setKnowledgeStatus(c, action) })
 	}
 	router.GET("/api/tickets/:id/knowledge", func(c *gin.Context) {
 		record, err := a.db.Get(c.Request.Context(), c.Param("id"))
@@ -89,7 +72,7 @@ func (a *App) knowledgeRoutes(router *gin.Engine) {
 			return
 		}
 		a.mu.Lock()
-		busy := a.busy["bub"] || a.busy["case"] || a.busy["advice"]
+		busy := a.busy["bub"] || a.busy["case"] || a.busy["advice"] || a.busy["lab"]
 		a.mu.Unlock()
 		c.JSON(200, gin.H{"case": caseView, "advice": adviceView, "enabled": a.cfg.Bub.Enabled, "busy": busy, "automatic_eligible": a.automaticallyEligible(record)})
 	})
@@ -116,6 +99,11 @@ func (a *App) importKnowledge(c *gin.Context) {
 		return
 	}
 	defer c.Request.MultipartForm.RemoveAll()
+	scope := strings.TrimSpace(c.PostForm("scope"))
+	if !validKnowledgeScope(scope) {
+		apiError(c, 400, "知识分类无效")
+		return
+	}
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		apiError(c, 400, "请选择要导入的文档")
@@ -164,13 +152,13 @@ func (a *App) importKnowledge(c *gin.Context) {
 			return
 		}
 	}
-	entry, err := a.db.SaveKnowledge(c.Request.Context(), knowledge.Entry{Kind: "sop", Title: redactDocumentText(title), Product: redactDocumentText(strings.TrimSpace(c.PostForm("product"))), SourceName: redactDocumentText(name), SourceHash: hash, ReplacesID: replaces, Blocks: blocks})
+	entry, err := a.db.SaveKnowledge(c.Request.Context(), knowledge.Entry{Kind: "sop", Scope: scope, Title: redactDocumentText(title), Product: redactDocumentText(strings.TrimSpace(c.PostForm("product"))), SourceName: redactDocumentText(name), SourceHash: hash, ReplacesID: replaces, Blocks: blocks})
 	if err != nil {
 		apiError(c, 400, "导入未保存，请检查标题、正文大小和被替代版本")
 		return
 	}
-	if entry.Title != redactDocumentText(title) || entry.Product != redactDocumentText(strings.TrimSpace(c.PostForm("product"))) || entry.ReplacesID != replaces {
-		apiError(c, 409, "相同文档已存在，请打开已有条目并通过“保存修订草稿”调整标题、产品或版本")
+	if entry.Title != redactDocumentText(title) || entry.Product != redactDocumentText(strings.TrimSpace(c.PostForm("product"))) || entry.ReplacesID != replaces || (scope != "" && entry.Scope != scope) {
+		apiError(c, 409, "相同文档已存在，请打开已有条目并通过“保存修订草稿”调整标题、产品、分类或版本")
 		return
 	}
 	c.JSON(201, entry)
@@ -179,6 +167,7 @@ func (a *App) importKnowledge(c *gin.Context) {
 func (a *App) draftKnowledge(c *gin.Context) {
 	var body struct {
 		Title         string `json:"title"`
+		Scope         string `json:"scope"`
 		Product       string `json:"product"`
 		Text          string `json:"text"`
 		SourceEntryID int64  `json:"source_entry_id"`
@@ -189,7 +178,11 @@ func (a *App) draftKnowledge(c *gin.Context) {
 		apiError(c, 400, "草稿格式无效")
 		return
 	}
-	entry := knowledge.Entry{Kind: "sop", Title: redactDocumentText(strings.TrimSpace(body.Title)), Product: redactDocumentText(strings.TrimSpace(body.Product)), SourceName: "人工整理草稿", ReplacesID: body.ReplacesID}
+	if !validKnowledgeScope(body.Scope) {
+		apiError(c, 400, "知识分类无效")
+		return
+	}
+	entry := knowledge.Entry{Kind: "sop", Scope: body.Scope, Title: redactDocumentText(strings.TrimSpace(body.Title)), Product: redactDocumentText(strings.TrimSpace(body.Product)), SourceName: "人工整理草稿", ReplacesID: body.ReplacesID}
 	if body.SourceEntryID != 0 {
 		source, err := a.db.Knowledge(c.Request.Context(), body.SourceEntryID)
 		if err != nil || source.Status == "archived" {
@@ -199,15 +192,10 @@ func (a *App) draftKnowledge(c *gin.Context) {
 		if strings.TrimSpace(body.Text) == "" {
 			body.Text = knowledgeDraftBody(source)
 		}
-		if entry.Title == "" {
-			entry.Title = source.Title + " · SOP 草稿"
+		if err := inheritKnowledgeSource(&entry, source); err != nil {
+			apiError(c, 400, err.Error())
+			return
 		}
-		if entry.Product == "" {
-			entry.Product = source.Product
-		}
-		entry.SourceName = "知识条目 #" + strconv.FormatInt(source.ID, 10)
-		entry.SourceTicketID = source.SourceTicketID
-		entry.MessageIDs = source.MessageIDs
 	}
 	if strings.TrimSpace(body.Text) == "" || len(body.Text) > 256*1024 {
 		apiError(c, 400, "草稿正文不能为空且不能超过 256 KiB")
@@ -235,4 +223,91 @@ func (a *App) draftKnowledge(c *gin.Context) {
 		return
 	}
 	c.JSON(201, saved)
+}
+
+func validKnowledgeScope(scope string) bool {
+	return scope == "" || scope == "reference" || scope == "technical" || scope == "policy"
+}
+
+func (a *App) knowledgeHistory(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		apiError(c, 400, "知识条目 ID 无效")
+		return
+	}
+	entries, err := a.db.KnowledgeHistory(c.Request.Context(), id)
+	if err != nil {
+		apiError(c, 404, "无法读取版本历史")
+		return
+	}
+	c.JSON(200, gin.H{"data": entries})
+}
+
+func (a *App) restoreKnowledge(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		apiError(c, 400, "知识条目 ID 无效")
+		return
+	}
+	entry, err := a.db.RestoreKnowledge(c.Request.Context(), id)
+	if err != nil {
+		apiError(c, 409, "无法恢复：请选择与当前正式版本不同的历史 SOP。恢复只生成草稿。")
+		return
+	}
+	c.JSON(201, entry)
+}
+
+func (a *App) setKnowledgeStatus(c *gin.Context, action string) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		apiError(c, 400, "知识条目 ID 无效")
+		return
+	}
+	if action == "publish" {
+		entry, readErr := a.db.Knowledge(c.Request.Context(), id)
+		if readErr != nil {
+			apiError(c, 404, "知识条目不存在")
+			return
+		}
+		if entry.LabBatchID > 0 {
+			batch, batchErr := a.db.LabBatch(c.Request.Context(), entry.LabBatchID)
+			if batchErr != nil || !lab.ValidationComplete(batch) {
+				apiError(c, 409, "留出对比尚未完整成功，不能发布此实验修订")
+				return
+			}
+		}
+		err = a.db.PublishKnowledge(c.Request.Context(), id)
+	} else {
+		err = a.db.ArchiveKnowledge(c.Request.Context(), id)
+	}
+	if err != nil {
+		apiError(c, 409, "此版本无法操作，请刷新后检查条目状态及被替代版本")
+		return
+	}
+	select {
+	case a.analysisWake <- struct{}{}:
+	default:
+	}
+	c.JSON(200, gin.H{"status": "ok"})
+}
+
+func inheritKnowledgeSource(entry *knowledge.Entry, source knowledge.Entry) error {
+	if entry.Title == "" {
+		entry.Title = source.Title + " · SOP 草稿"
+	}
+	if entry.Product == "" {
+		entry.Product = source.Product
+	}
+	entry.SourceName = "知识条目 #" + strconv.FormatInt(source.ID, 10)
+	entry.SourceTicketID = source.SourceTicketID
+	entry.MessageIDs = source.MessageIDs
+	entry.SourceTickets = append([]string{}, source.SourceTickets...)
+	entry.LabBatchID = source.LabBatchID
+	if entry.Scope == "" {
+		entry.Scope = source.Scope
+	}
+	if source.Scope == "policy" && entry.Scope != "policy" {
+		return errors.New("售后政策资料需保留政策分类")
+	}
+	return nil
 }
