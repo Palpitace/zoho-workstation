@@ -16,3 +16,5 @@ Intel Mac 在安装依赖前确认 runner 的 Rust、Clang 与 OpenSSL 静态库
 测试阶段同时运行 scripts/test_*.py 的标准库打包回归，覆盖 universal2 多架构标题解析与任一架构的外部绝对依赖拒绝；随后仍对实际下载包执行原生解压验收。
 
 下载构建新增固定CPU llama.cpp、实际模型初始化/无外部HTTP重启/检索回归。Windows静态MSVC运行库并用dumpbin拒绝VC redistributable依赖；macOS/Linux无OpenSSL/OpenMP/GPU运行依赖。矩阵超时60分钟，仍无生产部署。
+
+原生矩阵对实际解压包运行现有图文编辑/批量审核/引用浏览器回归，Playwright1.64.1固定，合成API不读取真实配置。

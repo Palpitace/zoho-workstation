@@ -172,7 +172,7 @@ class Quiet(http.server.SimpleHTTPRequestHandler):
 
 
 server = http.server.ThreadingHTTPServer(
-    ("127.0.0.1", 0), functools.partial(Quiet, directory=str(root / "web/dist"))
+    ("127.0.0.1", 0), functools.partial(Quiet, directory=os.environ.get("KNOWLEDGE_UI_DIST", str(root / "web/dist")))
 )
 threading.Thread(target=server.serve_forever, daemon=True).start()
 with sync_playwright() as p:

@@ -69,13 +69,15 @@ jobs:
         run: |
           python scripts/build_embedding.py
           VERIFY_LOCAL_EMBEDDING=1 go test ./internal/embedding -run TestNativeRetrieval -v -timeout=30m
+      - name: Install pinned browser for packaged editor verification
+        run: uv run --no-project --with playwright==1.64.1 python -m playwright install chromium
       - name: Build self-contained package
         run: python scripts/package.py
       - name: Verify relocated package
         run: |
           for archive in .cache/packages/*.zip .cache/packages/*.tar.gz; do
             [ -f "$archive" ] || continue
-            python scripts/smoke_package.py "$archive"
+            VERIFY_PACKAGE_UI=1 uv run --no-project --with playwright==1.64.1 python scripts/smoke_package.py "$archive"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

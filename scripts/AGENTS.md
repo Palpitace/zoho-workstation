@@ -43,3 +43,5 @@ check_knowledge_ui.py 使用相同的临时静态服务与合成 API，覆盖知
 | build_embedding.py | 原生推理构建 | 固定稳定 llama.cpp 源码和 SHA256，CPU 静态构建 |
 
 本地检索：build_embedding.py按固定SHA256验证官方稳定llama.cpp v0.9.0源码，只构建CPU静态llama-server（禁GPU/OpenSSL/OpenMP），复制许可证和版本；runtime为忽略的第三方构建产物。package.py复制runtime/llama，不带模型权重、知识或用户配置。模型首次使用在应用内显式下载。CMake和C++仅构建机需要。
+
+包级界面验收：`VERIFY_PACKAGE_UI=1`使smoke在解压后的web/dist上运行既有浏览器脚本（通过KNOWLEDGE_UI_DIST），不只验证源码构建目录。CI用PyPI核实的Playwright1.64.1及其固定Chromium，属于测试工具、不进入运行包。

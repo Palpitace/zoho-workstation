@@ -53,6 +53,8 @@ def main(archive: Path):
         if not (root / "web/dist/vendor/vditor/dist/js/lute/lute.min.js").is_file():
             raise RuntimeError("local Markdown editor assets missing")
         print("relocated CPU inference executable and local editor assets: PASS")
+        if os.environ.get("VERIFY_PACKAGE_UI") == "1":
+            subprocess.run([sys.executable, str(Path(__file__).with_name("check_knowledge_ui.py"))], env={**os.environ, "KNOWLEDGE_UI_DIST": str(root / "web/dist")}, check=True, timeout=180)
         binary = root / ("workstation.exe" if os.name == "nt" else "workstation")
         invalid = subprocess.run([str(binary), "check"], cwd=root, capture_output=True)
         assert invalid.returncode != 0
