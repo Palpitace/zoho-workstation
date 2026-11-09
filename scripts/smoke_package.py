@@ -1,5 +1,5 @@
 # input: 自有构建产物归档，不读取用户凭据。
-# output: 异地解压后的 SDK/知识/文档/离线实验入口、所有 Mach-O 架构依赖、代理与 Go 运行检查。
+# output: 异地解压后的 SDK/知识/文档/离线实验入口、所有 Mach-O 架构加载依赖（排除自身 ID）、代理与 Go 运行检查。
 # pos: 下载包验收边界，供三个原生 CI 平台调用。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 import hashlib
 import json
@@ -15,14 +15,21 @@ def check_native_libraries(packages: Path):
     for library in packages.rglob("*"):
         if library.suffix not in (".so", ".dylib"):
             continue
-        linked = subprocess.check_output(["otool", "-arch", "all", "-L", str(library)], text=True)
+        linked = subprocess.check_output(["otool", "-arch", "all", "-l", str(library)], text=True)
+        command = ""
         for line in linked.splitlines():
-            # Universal binaries have a separate unindented header per architecture.
-            if not line[:1].isspace():
-                continue
-            dependency = line.strip().split(" (", 1)[0]
-            if dependency.startswith("/") and not dependency.startswith(("/usr/lib/", "/System/Library/")):
-                raise AssertionError(f"SDK depends on build-host library: {dependency}")
+            value = line.strip()
+            if value.startswith("Load command "):
+                command = ""
+            elif value.startswith("cmd "):
+                command = value.split()[1]
+            elif value.startswith("name ") and command in {
+                "LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB",
+                "LC_LAZY_LOAD_DYLIB", "LC_LOAD_UPWARD_DYLIB",
+            }:
+                dependency = value[5:].rsplit(" (offset ", 1)[0]
+                if dependency.startswith("/") and not dependency.startswith(("/usr/lib/", "/System/Library/")):
+                    raise AssertionError(f"SDK depends on build-host library: {dependency}")
 
 
 def main(archive: Path):

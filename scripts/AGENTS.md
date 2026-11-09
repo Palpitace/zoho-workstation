@@ -24,7 +24,7 @@ package.py 仅复制显式允许的文件和新建 runtime/packages，禁止整�
 
 锁定 cryptography 50.0.2 无 Intel macOS wheel；该平台从已校验 Hash 的源码构建，强制 OPENSSL_STATIC=1 且不复用缓存扩展。Rust/Clang/Homebrew OpenSSL 仅在 CI 构建机需要，包不依赖用户 Homebrew。macOS smoke 用 otool 检查 SDK 原生扩展，不允许非系统绝对动态库路径，随后实际 SDK 导入验证。
 
-macOS 原生库检查显式遍历全部架构，只解析 otool 缩进的依赖行，跳过每段架构标题；不能把 universal2 的第二段文件路径当成依赖，也不能仅检查第一架构。标准库合成回归覆盖单架构、双架构及任一架构存在 Homebrew 绝对依赖，纳入 make test 和三平台 CI；实际库仍由原生解压验收检查。
+macOS 原生库检查显式遍历全部架构，解析 otool -l 的加载依赖命令，忽略 LC_ID_DYLIB 自身标识及每段架构标题；不能把 universal2 的第二段文件路径当成依赖，也不能仅检查第一架构。标准库合成回归覆盖单架构、双架构、绝对路径自身标识及任一架构存在 Homebrew 绝对依赖，纳入 make test 和三平台 CI；实际库仍由原生解压验收检查。
 
 Issue #2：便携包验收通过 Go check 的真实隔离 Python 检查大小写 ALL_PROXY、仅 SOCKS 与 HTTP(S) 共存；临时移开解压副本的 socksio 验证安全失败，再恢复验证成功。所有代理地址为本机合成地址，不发送请求；不只依赖 SDK import 成功。所有平台共用 uv.lock 导出，因此都会携带 SOCKS 可选依赖。
 
