@@ -12,3 +12,5 @@
 固定 Actions 提交 SHA；Go 版本读取 go.mod，pnpm 12.17.0 与 web/package.json 一致，Node 26.10.0、uv 0.13.7、CPython 3.12.14 固定。Windows Server 2025 x64、macOS 15 Intel/ARM 原生测试，运行完整小型测试、构建、异地解压验收，再上传产物保留 30 天。仅 contents:read，不使用业务凭据。CI 成功才视为相应操作系统验证通过。
 
 Intel Mac 在安装依赖前确认 runner 的 Rust、Clang 与 OpenSSL 静态库；cryptography 50.0.2 没有 Intel wheel，打包阶段从锁定源码静态链接 OpenSSL，不升级/降级运行时依赖。macOS smoke 拒绝指向构建机的 SDK 动态库依赖。
+
+测试阶段同时运行 scripts/test_*.py 的标准库打包回归，覆盖 universal2 多架构标题解析与任一架构的外部绝对依赖拒绝；随后仍对实际下载包执行原生解压验收。

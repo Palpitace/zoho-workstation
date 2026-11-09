@@ -1,5 +1,5 @@
 # input: Go、pnpm、uv/Python 工具链与根 .env；测试仅使用合成数据。
-# output: 构建、本机运行、受控采样及小型验证命令。
+# output: 构建、本机运行、受控采样及业务/打包合成验证命令。
 # pos: 项目命令入口。一旦我被更新务必更新我的开头注释以及所属文件夹的 AGENTS.md。
 .PHONY: setup test build run sample docs-check
 
@@ -12,6 +12,7 @@ test:
 	go test ./...
 	pnpm --dir web check
 	python/.venv/bin/python -m unittest discover -s python -p 'test_*.py'
+	python/.venv/bin/python -m unittest discover -s scripts -p 'test_*.py'
 	go run ./cmd/checkdocs
 
 build:

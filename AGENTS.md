@@ -68,7 +68,7 @@ Zoho 地址使用实际数据中心的 origin，不含 `/api/v1` 或 `/oauth/v2/
 ## 启动、构建与验证
 
 从项目根执行：`pnpm --dir web install --frozen-lockfile` 安装前端固定依赖；`make test` 运行 Go 合成测试、前端类型及文档结构检查；`make build` 构建前端静态文件与 Go 程序；`make sample` 固定最多 50 个样本 ID 并补齐本轮最多 3 张；`make run` 构建并启动本机服务。前端开发用 `pnpm --dir web dev` 代理本机 Go API。
-首次可用 `make setup` 依次安装锁定的 Go、pnpm 和 uv 依赖；`make test` 同时执行 Python 合成契约检查。依赖版本只在需要兼容性变化时更新。
+首次可用 `make setup` 依次安装锁定的 Go、pnpm 和 uv 依赖；`make test` 同时执行 Python 合成契约和打包脚本回归检查。依赖版本只在需要兼容性变化时更新。
 Go 默认在 127.0.0.1:8080 提供 web/dist 和 `/api/status`、`/api/tickets`、`/api/tickets/:id`、`/api/tickets/:id/analysis`，TCP 监听 IP 可由 APP_LISTEN_HOST 配置。Windows/WSL/容器访问步骤见 docs/compatibility.md。生产运行需保留 web/dist 和 Python 环境，不需要 Node 服务。服务启动后接续处理固定样本待同步批次（默认每批 9 张、最多 3 张并发读取、正常批次间隔 1 秒、失败退避），处理完后按 SYNC_INTERVAL 常规增量轮询；同步独立冷却失败工单，确认 Zoho 已合并、删除或移出部门则保留历史并停止读取，默认列表隐藏、可勾选查看历史，水位不再等待单票恢复。继续调度 Bub 总结后的 Jev 评估；样本集合冻结后复用，不重建数据库绕过采样上限。
 页面提供 POST `/api/sync` 与 `/api/tickets/:id/analysis/:kind`，校验本机 Host、允许 Origin 与临时会话令牌。serve 持有同库同步/分析操作锁，运行期间使用页面操作；CLI sample/analyze 会拒绝并发写者。后台自动分析覆盖所有已完整同步且未停止的工单，研发/留出清单不限制业务调度；完成后立即接续下一张，累计请求次数仅作统计，不阻止模型处理。SYNC_BATCH_SIZE（默认 9，1..50）与 SYNC_CONCURRENCY（默认 3，1..5）分别控制批次和并发，修改后重启生效；SQLite 保存仍串行。详细状态/关闭约定见 internal/app/AGENTS.md。
 `./bin/workstation prepare -max 20` 在 data/review 保存脱敏副本和固定开发/留出样本清单；`analyze -kind jev -max 1` 或 `-kind bub` 调用所选能力。prepare 仅保存会话；首次研发调用先选 bub，再选 jev。Jev 实际输入 Hash 覆盖当前会话及总结内容、Schema 和模型信息，相同内容的重复总结不因运行 ID 变化重复评估。默认 development-1 轮次和累计请求次数存于 SQLite，重启不清零；请求额度已关闭。Python 安装见 python/AGENTS.md。
