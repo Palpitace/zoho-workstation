@@ -231,7 +231,7 @@ func HybridSources(entries []Entry, vectors []Vector, queryVector []float32, exc
 	})
 	// Confidence gates the semantic channel, not every useful neighbour. A
 	// lower-ranked bilingual source can still provide the relevant evidence.
-	if len(semantic) > 0 && semantic[0].score < 0.45 {
+	if len(semantic) > 0 && semantic[0].score < 0.40 {
 		semantic = nil
 	}
 	if len(semantic) > 24 {

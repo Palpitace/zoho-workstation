@@ -87,6 +87,11 @@ func TestNativeRetrieval(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		scores := make([]float64, len(vectors))
+		for i, vector := range vectors {
+			scores[i], _ = knowledge.Cosine(v, vector.Values)
+		}
+		t.Logf("synthetic query=%q cosine=%0.6f", tc.query, scores)
 		old := knowledge.SelectSources(docs, "", tc.product, tc.query, 3)
 		got := knowledge.HybridSources(docs, vectors, v, "", tc.product, tc.query, 3)
 		if len(old) > 0 && old[0].EntryID == tc.want {

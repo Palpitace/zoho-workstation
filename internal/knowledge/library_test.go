@@ -108,7 +108,7 @@ func TestSemanticConfidenceKeepsRelevantNeighbours(t *testing.T) {
 	}
 	vectors := []knowledge.Vector{
 		{EntryID: 1, BlockID: "one", SourceHash: "a", ChunkVersion: knowledge.ChunkVersion, Values: []float32{.5, .8660254}},
-		{EntryID: 2, BlockID: "one", SourceHash: "b", ChunkVersion: knowledge.ChunkVersion, Values: []float32{.4, .9165151}},
+		{EntryID: 2, BlockID: "one", SourceHash: "b", ChunkVersion: knowledge.ChunkVersion, Values: []float32{.38, .9249865}},
 	}
 	sources := knowledge.HybridSources(entries, vectors, []float32{1, 0}, "", "", "中文连接问题", 3)
 	if len(sources) != 2 {
